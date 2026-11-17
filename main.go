@@ -8,11 +8,12 @@ import (
 
 // ProxyApp holds the top-level application state shared across tabs.
 type ProxyApp struct {
-	cfg    *Config
-	win    fyne.Window
-	tabs   *container.AppTabs
-	wpTab  *serviceTab
-	bdTab  *serviceTab
+	cfg          *Config
+	win          fyne.Window
+	tabs         *container.AppTabs
+	wpTab        *serviceTab
+	bdTab        *serviceTab
+	logCollapsed bool
 }
 
 func main() {
@@ -30,8 +31,8 @@ func main() {
 	wpSvc := NewService("wireproxy", cfg)
 	bdSvc := NewService("byedpi", cfg)
 
-	pa.wpTab = newServiceTab(wpSvc, cfg, w, pa.showSettings)
-	pa.bdTab = newServiceTab(bdSvc, cfg, w, pa.showSettings)
+	pa.wpTab = newServiceTab(wpSvc, cfg, w, pa.showSettings, pa.toggleLog)
+	pa.bdTab = newServiceTab(bdSvc, cfg, w, pa.showSettings, pa.toggleLog)
 
 	pa.tabs = container.NewAppTabs(
 		container.NewTabItem("WireProxy", pa.wpTab.Content()),
@@ -67,4 +68,21 @@ func (pa *ProxyApp) showSettings() {
 		pa.wpTab.refreshAll()
 		pa.bdTab.refreshAll()
 	})
+}
+
+// toggleLog collapses or expands the log panel on both tabs and resizes
+// the window so it physically shrinks when the log is hidden.  The state
+// is shared across tabs so both always agree.
+func (pa *ProxyApp) toggleLog() {
+	pa.logCollapsed = !pa.logCollapsed
+	visible := !pa.logCollapsed
+	pa.wpTab.setLogVisible(visible)
+	pa.bdTab.setLogVisible(visible)
+
+	h := float32(logExpandedHeight)
+	if pa.logCollapsed {
+		h = logCollapsedHeight
+	}
+	w := pa.win.Canvas().Size().Width
+	pa.win.Resize(fyne.NewSize(w, h))
 }
