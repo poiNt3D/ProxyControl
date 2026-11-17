@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -12,16 +13,19 @@ import (
 // The directory structure matches the bash version exactly so that
 // existing systemd units and config files keep working unchanged.
 type ServiceDef struct {
-	Key        string // "wireproxy" or "byedpi"
-	Label      string // human-readable
-	UnitName   string // systemd user unit, e.g. "wireproxy.service"
-	ConfigDir  string // ~/.config/proxycontrol/<key>/
-	LogFile    string // …/<key>/<key>.log (if the unit appends to a file)
-	ActiveConf string // …/<key>/wireproxy.conf or byedpi.txt
-	ConfExt    string // "conf" or "txt" — for listing profile files
-	PortFile   string // byedpi only: …/byedpi/.port
-	Template   string // wireproxy only: …/wireproxy/wireproxy.template
-	cfg        *Config
+	Key         string // "wireproxy" or "byedpi"
+	Label       string // human-readable
+	UnitName    string // systemd user unit, e.g. "wireproxy.service"
+	ConfigDir   string // ~/.config/proxycontrol/<key>/
+	LogFile     string // …/<key>/<key>.log (if the unit appends to a file)
+	ActiveConf  string // …/<key>/wireproxy.conf or byedpi.txt
+	ConfExt     string // "conf" or "txt" — for listing profile files
+	PortFile    string // byedpi only: …/byedpi/.port
+	Template    string // wireproxy only: …/wireproxy/wireproxy.template
+	StateFile   string // …/<key>/.active_profile
+	ExcludeName string // profile name to exclude from the list (active config)
+	HasProfiles bool   // whether this service supports config profile selection
+	cfg         *Config
 }
 
 // NewService builds a ServiceDef for the given key, using cfg for the port.
@@ -30,27 +34,33 @@ func NewService(key string, cfg *Config) *ServiceDef {
 	switch key {
 	case "wireproxy":
 		return &ServiceDef{
-			Key:        "wireproxy",
-			Label:      "WireProxy",
-			UnitName:   "wireproxy.service",
-			ConfigDir:  filepath.Join(base, "wireproxy"),
-			LogFile:    filepath.Join(base, "wireproxy", "wireproxy.log"),
-			ActiveConf: filepath.Join(base, "wireproxy", "wireproxy.conf"),
-			ConfExt:    "conf",
-			Template:   filepath.Join(base, "wireproxy", "wireproxy.template"),
-			cfg:        cfg,
+			Key:         "wireproxy",
+			Label:       "WireProxy",
+			UnitName:    "wireproxy.service",
+			ConfigDir:   filepath.Join(base, "wireproxy"),
+			LogFile:     filepath.Join(base, "wireproxy", "wireproxy.log"),
+			ActiveConf:  filepath.Join(base, "wireproxy", "wireproxy.conf"),
+			ConfExt:     "conf",
+			Template:    filepath.Join(base, "wireproxy", "wireproxy.template"),
+			StateFile:   filepath.Join(base, "wireproxy", ".active_profile"),
+			ExcludeName: "wireproxy", // wireproxy.conf is the active config, not a profile
+			HasProfiles: true,
+			cfg:         cfg,
 		}
 	case "byedpi":
 		return &ServiceDef{
-			Key:        "byedpi",
-			Label:      "ByeDPI",
-			UnitName:   "byedpi.service",
-			ConfigDir:  filepath.Join(base, "byedpi"),
-			LogFile:    filepath.Join(base, "byedpi", "byedpi.log"),
-			ActiveConf: filepath.Join(base, "byedpi", "byedpi.txt"),
-			ConfExt:    "txt",
-			PortFile:   filepath.Join(base, "byedpi", ".port"),
-			cfg:        cfg,
+			Key:         "byedpi",
+			Label:       "ByeDPI",
+			UnitName:    "byedpi.service",
+			ConfigDir:   filepath.Join(base, "byedpi"),
+			LogFile:     filepath.Join(base, "byedpi", "byedpi.log"),
+			ActiveConf:  filepath.Join(base, "byedpi", "byedpi.txt"),
+			ConfExt:     "txt",
+			PortFile:    filepath.Join(base, "byedpi", ".port"),
+			StateFile:   filepath.Join(base, "byedpi", ".active_profile"),
+			ExcludeName: "", // all *.txt files are profiles; .active_profile is separate
+			HasProfiles: true,
+			cfg:         cfg,
 		}
 	}
 	return nil
@@ -169,4 +179,123 @@ func (s *ServiceDef) isActiveConf(path string) bool {
 // file manager (xdg-open).
 func (s *ServiceDef) OpenConfigDir() {
 	_ = exec.Command("xdg-open", s.ConfigDir).Start()
+}
+
+// --- profile / config selection -------------------------------------------
+
+// Profiles returns the sorted list of available config profile names.
+// A profile is any file *.<ConfExt> in the service directory, minus the
+// extension.  The active config name (ExcludeName) is filtered out so
+// that e.g. wireproxy.conf does not appear as a selectable profile.
+func (s *ServiceDef) Profiles() []string {
+	entries, err := os.ReadDir(s.ConfigDir)
+	if err != nil {
+		return nil
+	}
+	ext := "." + s.ConfExt
+	var names []string
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if !strings.HasSuffix(name, ext) {
+			continue
+		}
+		profileName := strings.TrimSuffix(name, ext)
+		if profileName == s.ExcludeName {
+			continue
+		}
+		names = append(names, profileName)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// ActiveProfileName returns the name of the currently selected profile,
+// or "" if no profile has been chosen yet.
+//
+// For wireproxy the .active_profile file stores the profile name directly.
+// For byedpi it stores the profile *content* (command-line args), so we
+// match it against each profile file to recover the name.
+func (s *ServiceDef) ActiveProfileName() string {
+	data, err := os.ReadFile(s.StateFile)
+	if err != nil {
+		return ""
+	}
+	content := strings.TrimSpace(string(data))
+	if content == "" {
+		return ""
+	}
+
+	if s.Key == "wireproxy" {
+		return content
+	}
+
+	// byedpi: match content against profile files
+	for _, profile := range s.Profiles() {
+		pdata, err := os.ReadFile(filepath.Join(s.ConfigDir, profile+"."+s.ConfExt))
+		if err == nil && strings.TrimSpace(string(pdata)) == content {
+			return profile
+		}
+	}
+	return ""
+}
+
+// ApplyProfile copies the named profile into the active config and restarts
+// the service if it is currently running.  Mirrors the bash WP_apply_config
+// and BD_apply_config functions.
+func (s *ServiceDef) ApplyProfile(name string) error {
+	profilePath := filepath.Join(s.ConfigDir, name+"."+s.ConfExt)
+	profileData, err := os.ReadFile(profilePath)
+	if err != nil {
+		return err
+	}
+
+	_ = os.MkdirAll(s.ConfigDir, 0o755)
+
+	switch s.Key {
+	case "wireproxy":
+		// 1. Profile content → active config (overwrite).
+		if err := os.WriteFile(s.ActiveConf, profileData, 0o644); err != nil {
+			return err
+		}
+		// 2. Append newline + template (BindAddress block).
+		if tplData, err := os.ReadFile(s.Template); err == nil && len(tplData) > 0 {
+			f, err := os.OpenFile(s.ActiveConf, os.O_APPEND|os.O_WRONLY, 0o644)
+			if err == nil {
+				f.Write([]byte("\n"))
+				f.Write(tplData)
+				f.Close()
+			}
+		}
+		// 3. Save the profile name.
+		_ = os.WriteFile(s.StateFile, []byte(name), 0o644)
+
+	case "byedpi":
+		// Profile content → .active_profile (consumed by the systemd unit).
+		if err := os.WriteFile(s.StateFile, profileData, 0o644); err != nil {
+			return err
+		}
+	}
+
+	if s.IsActive() {
+		return s.Restart()
+	}
+	return nil
+}
+
+// HasActiveConfig reports whether a profile has been selected and applied.
+// Used by the Start button to warn the user if they need to pick a config
+// first (same check as action_start_restart in the bash version).
+func (s *ServiceDef) HasActiveConfig() bool {
+	switch s.Key {
+	case "wireproxy":
+		info, err := os.Stat(s.ActiveConf)
+		return err == nil && !info.IsDir() && info.Size() > 0
+	case "byedpi":
+		data, err := os.ReadFile(s.StateFile)
+		return err == nil && len(strings.TrimSpace(string(data))) > 0
+	}
+	return true
 }

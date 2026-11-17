@@ -7,6 +7,7 @@ import (
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/widget"
 )
 
@@ -15,6 +16,7 @@ import (
 type serviceTab struct {
 	svc       *ServiceDef
 	cfg       *Config
+	win       fyne.Window
 	onSettings func()
 
 	status   *widget.Label
@@ -31,10 +33,11 @@ type serviceTab struct {
 }
 
 // newServiceTab creates the tab UI and starts its refresh goroutines.
-func newServiceTab(svc *ServiceDef, cfg *Config, onSettings func()) *serviceTab {
+func newServiceTab(svc *ServiceDef, cfg *Config, win fyne.Window, onSettings func()) *serviceTab {
 	t := &serviceTab{
 		svc:       svc,
 		cfg:       cfg,
+		win:       win,
 		onSettings: onSettings,
 	}
 
@@ -48,17 +51,24 @@ func newServiceTab(svc *ServiceDef, cfg *Config, onSettings func()) *serviceTab 
 	t.logScroll = container.NewVScroll(t.logLabel)
 	t.logScroll.SetMinSize(fyne.NewSize(0, 200))
 
+	// Combined Start/Restart button: label changes based on state.
+	// Before starting, checks that a config profile has been selected
+	// (same guard as action_start_restart in the bash version).
 	t.startBtn = widget.NewButton("▶ Старт", func() {
 		if t.svc.IsActive() {
 			_ = t.svc.Restart()
-		} else {
-			_ = t.svc.Start()
+			t.refreshStatus()
+			return
 		}
-		t.refreshStatus()
-	})
-
-	restartBtn := widget.NewButton("♻ Рестарт", func() {
-		_ = t.svc.Restart()
+		if !t.svc.HasActiveConfig() {
+			dialog.ShowInformation(
+				fmt.Sprintf("%s: не выбран конфиг", t.svc.Label),
+				"Активный конфиг не найден.\n\nСначала выберите профиль кнопкой «Конфиг».",
+				t.win,
+			)
+			return
+		}
+		_ = t.svc.Start()
 		t.refreshStatus()
 	})
 
@@ -67,15 +77,25 @@ func newServiceTab(svc *ServiceDef, cfg *Config, onSettings func()) *serviceTab 
 		t.refreshStatus()
 	})
 
-	settingsBtn := widget.NewButton("⚙ Настройки", onSettings)
+	settingsBtn := widget.NewButton("⚙ Настройки", t.onSettings)
 
-	buttons := container.NewHBox(t.startBtn, restartBtn, stopBtn, settingsBtn)
+	// Build the button row.  "Select Config" is only shown for services
+	// that support profile selection (HasProfiles).
+	var btnObjs []fyne.CanvasObject
+	btnObjs = append(btnObjs, t.startBtn, stopBtn)
+	if t.svc.HasProfiles {
+		configBtn := widget.NewButton("📋 Конфиг", t.showConfigDialog)
+		btnObjs = append(btnObjs, configBtn)
+	}
+	btnObjs = append(btnObjs, settingsBtn)
+
+	buttons := container.NewHBox(btnObjs...)
 	topPanel := container.NewVBox(t.status, t.network)
 
 	t.content = container.NewBorder(
-		topPanel,   // top:  status + network
-		buttons,    // bottom: control buttons
-		nil, nil,   // no left/right sidebars
+		topPanel,    // top:  status + network
+		buttons,     // bottom: control buttons
+		nil, nil,    // no left/right sidebars
 		t.logScroll, // center: scrollable log
 	)
 
@@ -115,6 +135,15 @@ func (t *serviceTab) refreshStatus() {
 
 	t.status.SetText(fmt.Sprintf("%s %s: %s  |  Порт: %d  |  Авто: %s",
 		dot, t.svc.Label, stateStr, port, autoStr))
+
+	// Append active profile name if the service supports profiles.
+	if t.svc.HasProfiles {
+		profile := t.svc.ActiveProfileName()
+		if profile == "" {
+			profile = "(не выбран)"
+		}
+		t.status.SetText(t.status.Text + "  |  Конфиг: " + profile)
+	}
 
 	if active {
 		t.startBtn.SetText("♻ Рестарт")
@@ -196,4 +225,49 @@ func (t *serviceTab) refreshAll() {
 	t.refreshStatus()
 	t.refreshLog()
 	t.refreshNetwork()
+}
+
+// showConfigDialog opens a modal that lists available config profiles in a
+// dropdown.  The currently active profile is pre-selected.  On "Применить"
+// the chosen profile is applied (copied to the active config / .active_profile)
+// and the service is restarted if it was running.
+func (t *serviceTab) showConfigDialog() {
+	profiles := t.svc.Profiles()
+	if len(profiles) == 0 {
+		dialog.ShowInformation(
+			"Нет конфигураций",
+			fmt.Sprintf("В папке\n%s\nнет файлов *.%s.",
+				t.svc.ConfigDir, t.svc.ConfExt),
+			t.win,
+		)
+		return
+	}
+
+	active := t.svc.ActiveProfileName()
+	sel := widget.NewSelect(profiles, nil)
+	if active != "" {
+		sel.SetSelected(active)
+	} else {
+		sel.SetSelected(profiles[0])
+	}
+
+	items := []*widget.FormItem{
+		{Text: "Профиль", Widget: sel},
+	}
+
+	d := dialog.NewForm(
+		fmt.Sprintf("Выбор конфигурации — %s", t.svc.Label),
+		"Применить", "Отмена",
+		items,
+		func(confirmed bool) {
+			if !confirmed || sel.Selected == "" {
+				return
+			}
+			_ = t.svc.ApplyProfile(sel.Selected)
+			t.refreshAll()
+		},
+		t.win,
+	)
+	d.Resize(fyne.NewSize(420, 200))
+	d.Show()
 }

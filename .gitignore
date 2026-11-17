@@ -7,6 +7,12 @@ proxycontrol.exe
 *.a
 *.so
 
+# Local build toolchain / deps (not committed)
+.go-sdk/
+.gldev/
+.gopath/
+.gocache/
+
 # IDE
 .idea/
 .vscode/

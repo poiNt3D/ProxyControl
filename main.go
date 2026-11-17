@@ -30,8 +30,8 @@ func main() {
 	wpSvc := NewService("wireproxy", cfg)
 	bdSvc := NewService("byedpi", cfg)
 
-	pa.wpTab = newServiceTab(wpSvc, cfg, pa.showSettings)
-	pa.bdTab = newServiceTab(bdSvc, cfg, pa.showSettings)
+	pa.wpTab = newServiceTab(wpSvc, cfg, w, pa.showSettings)
+	pa.bdTab = newServiceTab(bdSvc, cfg, w, pa.showSettings)
 
 	pa.tabs = container.NewAppTabs(
 		container.NewTabItem("WireProxy", pa.wpTab.Content()),
