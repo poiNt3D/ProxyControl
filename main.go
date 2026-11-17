@@ -1,6 +1,8 @@
 package main
 
 import (
+	"time"
+
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
 	"fyne.io/fyne/v2/container"
@@ -84,11 +86,42 @@ func (pa *ProxyApp) toggleLog() {
 	pa.tabs.Items[0].Content = pa.wpTab.Content()
 	pa.tabs.Items[1].Content = pa.bdTab.Content()
 	pa.tabs.Refresh()
+	// Force the content to drop any cached layout from the previous
+	// (expanded) state before we measure its minimum, otherwise MinSize
+	// can still report the stale ~480px expanded height.
+	pa.win.Content().Refresh()
 
-	h := float32(logExpandedHeight)
-	if pa.logCollapsed {
-		h = logCollapsedHeight
-	}
 	w := pa.win.Canvas().Size().Width
-	pa.win.Resize(fyne.NewSize(w, h))
+	if pa.logCollapsed {
+		// Measure the rebuilt VBox's true minimum height and request
+		// exactly that, rather than a fixed constant (150) that relied on
+		// Fyne clamping it up to the content min.  That clamping works at
+		// startup (window created fresh) but is unreliable after a toggle:
+		// the window manager's minimum-size hint can linger at the
+		// previously-expanded height, so a too-small request is clamped
+		// back up to the stale expanded value and the window stays too
+		// tall.  Requesting the real minimum leaves nothing to clamp.
+		h := pa.win.Content().MinSize().Height
+		if h < logCollapsedHeight {
+			h = logCollapsedHeight // safety floor
+		}
+		pa.win.Resize(fyne.NewSize(w, h))
+
+		// Some window managers clamp the synchronous Resize above against
+		// the stale expanded min-size hint, which Fyne only refreshes on
+		// the next render tick (after Resize returns).  Re-issue the same
+		// Resize one frame later so the hint has caught up and the window
+		// actually shrinks.  Window.Resize marshals to the main thread via
+		// runOnMain, so this is safe from the timer goroutine.  Re-check
+		// logCollapsed inside in case the user toggled back to expanded
+		// before the timer fired.
+		target := h
+		time.AfterFunc(80*time.Millisecond, func() {
+			if pa.logCollapsed {
+				pa.win.Resize(fyne.NewSize(w, target))
+			}
+		})
+	} else {
+		pa.win.Resize(fyne.NewSize(w, logExpandedHeight))
+	}
 }
