@@ -2,10 +2,12 @@ package main
 
 import (
 	"fmt"
+	"image/color"
 	"sync"
 	"time"
 
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/layout"
@@ -30,15 +32,17 @@ type serviceTab struct {
 	onToggleLog func()
 
 	// Status panel: separate field widgets instead of one pipe-joined string.
-	stateDot  *widget.Label
+	stateDot  *canvas.Circle // colored circle: green=running, red=stopped
 	stateText *widget.Label
 	portVal   *widget.Label
 	autoVal   *widget.Label
 
-	network   *widget.Label
-	logLabel  *widget.Label
-	logScroll *container.Scroll
-	logHeader *widget.Button // collapsible header bar (placeholder when collapsed)
+	network     *widget.Label
+	topPanel    fyne.CanvasObject // status row + network label (reused in buildContent)
+	buttonsRow  fyne.CanvasObject // control buttons + config dropdown (reused)
+	logLabel    *widget.Label
+	logScroll   *container.Scroll
+	logHeader   *widget.Button // collapsible header bar (placeholder when collapsed)
 
 	// Inline config dropdown (right-aligned on the button row).
 	configSelect   *widget.Select
@@ -79,18 +83,22 @@ func newServiceTab(svc *ServiceDef, cfg *Config, win fyne.Window,
 	titleLabel := widget.NewLabel(svc.Label)
 	titleLabel.TextStyle = fyne.TextStyle{Bold: true}
 
-	t.stateDot = widget.NewLabel("🔴")
+	// Colored status indicator: a canvas.Circle in a fixed-size cell so
+	// the HBox reserves space for it (canvas primitives have zero MinSize).
+	t.stateDot = canvas.NewCircle(color.NRGBA{R: 200, G: 40, B: 40, A: 255}) // red initially
+	dotCell := container.NewGridWrap(fyne.NewSize(14, 14), t.stateDot)
+
 	t.stateText = widget.NewLabel("Остановлен")
 	t.stateText.TextStyle = fyne.TextStyle{Bold: true}
 
 	portVal, portField := newStatusField("Порт")
 	t.portVal = portVal
-	autoVal, autoField := newStatusField("Авто")
+	autoVal, autoField := newStatusField("Автозапуск")
 	t.autoVal = autoVal
 
 	statusRow := container.NewHBox(
 		titleLabel,
-		t.stateDot,
+		dotCell,
 		t.stateText,
 		layout.NewSpacer(),
 		portField,
@@ -98,7 +106,7 @@ func newServiceTab(svc *ServiceDef, cfg *Config, win fyne.Window,
 	)
 
 	t.network = widget.NewLabel("")
-	topPanel := container.NewVBox(statusRow, t.network)
+	t.topPanel = container.NewVBox(statusRow, t.network)
 
 	// --- Log panel (collapsible) ---
 	// The header bar is always visible — it acts as the placeholder when
@@ -111,9 +119,6 @@ func newServiceTab(svc *ServiceDef, cfg *Config, win fyne.Window,
 	t.logLabel.Wrapping = fyne.TextWrapWord
 	t.logScroll = container.NewVScroll(t.logLabel)
 	t.logScroll.SetMinSize(fyne.NewSize(0, 200))
-
-	// Center: header (always visible) + scroll (hidden when collapsed).
-	logArea := container.NewVBox(t.logHeader, t.logScroll)
 
 	// --- Control buttons ---
 	t.startBtn = widget.NewButton("▶ Старт", func() {
@@ -152,20 +157,17 @@ func newServiceTab(svc *ServiceDef, cfg *Config, win fyne.Window,
 	}
 
 	// Button row: left buttons, spacer pushes config dropdown to the right.
-	var buttons fyne.CanvasObject
 	if rightSide != nil {
-		buttons = container.NewHBox(leftBtns, layout.NewSpacer(), rightSide)
+		t.buttonsRow = container.NewHBox(leftBtns, layout.NewSpacer(), rightSide)
 	} else {
-		buttons = container.NewHBox(leftBtns, layout.NewSpacer())
+		t.buttonsRow = container.NewHBox(leftBtns, layout.NewSpacer())
 	}
 
-	// Layout: status on top, buttons on bottom, collapsible log in center.
-	t.content = container.NewBorder(
-		topPanel,  // top: status + network
-		buttons,   // bottom: control buttons + config dropdown
-		nil, nil,
-		logArea,   // center: collapsible log header + scroll
-	)
+	// Build the initial content (log expanded).  buildContent is also
+	// called on every toggle — when collapsed, the scroll is omitted from
+	// the border layout entirely, so its 32px scrollContainerMinSize
+	// cannot leak into the window's minimum height.
+	t.content = t.buildContent(true)
 
 	// Initial refresh, then background loops.
 	t.refreshStatus()
@@ -201,16 +203,36 @@ func (t *serviceTab) buildConfigSelect() {
 // Content returns the root canvas object for this tab.
 func (t *serviceTab) Content() fyne.CanvasObject { return t.content }
 
-// setLogVisible shows or hides the log scroll and updates the header
-// chevron.  The header bar itself stays visible — it is the placeholder
-// when collapsed.  The window resize is handled by ProxyApp.toggleLog so
-// both tabs stay in sync.
+// buildContent constructs the tab's root layout.  When the log is
+// expanded, a border layout puts the scroll in the center (filling the
+// space between the header and the bottom buttons).  When collapsed,
+// a plain VBox stacks status + header + buttons at the top with no
+// empty gap — a border layout would pin the buttons to the bottom of
+// the canvas, leaving a visible gap even at minimum window height.
+func (t *serviceTab) buildContent(includeLog bool) fyne.CanvasObject {
+	if includeLog {
+		topWithHeader := container.NewVBox(t.topPanel, t.logHeader)
+		return container.NewBorder(
+			topWithHeader, // top: status + log header
+			t.buttonsRow,  // bottom: control buttons + config dropdown
+			nil, nil,
+			t.logScroll,   // center: scrollable log
+		)
+	}
+	// Collapsed: VBox — no center, no gap.
+	return container.NewVBox(t.topPanel, t.logHeader, t.buttonsRow)
+}
+
+// setLogVisible rebuilds the tab content with or without the log scroll
+// and updates the header chevron.  The header bar itself stays visible —
+// it is the placeholder when collapsed.  The caller (ProxyApp.toggleLog)
+// is responsible for updating the AppTabs item and resizing the window.
 func (t *serviceTab) setLogVisible(visible bool) {
+	t.content = t.buildContent(visible)
+	t.content.Refresh()
 	if visible {
-		t.logScroll.Show()
 		t.logHeader.SetText("Лог ▾")
 	} else {
-		t.logScroll.Hide()
 		t.logHeader.SetText("Лог ▸")
 	}
 }
@@ -224,12 +246,13 @@ func (t *serviceTab) refreshStatus() {
 	port := t.svc.Port()
 
 	if active {
-		t.stateDot.SetText("🟢")
+		t.stateDot.FillColor = color.NRGBA{R: 40, G: 180, B: 40, A: 255} // green
 		t.stateText.SetText("Запущен")
 	} else {
-		t.stateDot.SetText("🔴")
+		t.stateDot.FillColor = color.NRGBA{R: 200, G: 40, B: 40, A: 255} // red
 		t.stateText.SetText("Остановлен")
 	}
+	t.stateDot.Refresh()
 
 	autoStr := "Выкл"
 	if enabled {

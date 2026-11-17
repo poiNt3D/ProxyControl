@@ -79,6 +79,12 @@ func (pa *ProxyApp) toggleLog() {
 	pa.wpTab.setLogVisible(visible)
 	pa.bdTab.setLogVisible(visible)
 
+	// The tab content was rebuilt — update the AppTabs items so the
+	// new content (with or without the scroll) is displayed.
+	pa.tabs.Items[0].Content = pa.wpTab.Content()
+	pa.tabs.Items[1].Content = pa.bdTab.Content()
+	pa.tabs.Refresh()
+
 	h := float32(logExpandedHeight)
 	if pa.logCollapsed {
 		h = logCollapsedHeight
