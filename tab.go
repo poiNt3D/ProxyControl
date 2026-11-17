@@ -12,12 +12,12 @@ import (
 	"fyne.io/fyne/v2/widget"
 )
 
-// Window heights for expanded / collapsed log modes.  The toggle button
-// switches between these so the window physically shrinks when the log
-// is hidden.  The collapsed height fits just the status + button rows.
+// Window heights for expanded / collapsed log modes.  The collapsible
+// log header toggles between these so the window physically shrinks when
+// the log is hidden.  The collapsed height fits status + header + buttons.
 const (
 	logExpandedHeight  = 480
-	logCollapsedHeight = 115
+	logCollapsedHeight = 150
 )
 
 // serviceTab holds the UI widgets for one service tab and runs the
@@ -38,7 +38,7 @@ type serviceTab struct {
 	network   *widget.Label
 	logLabel  *widget.Label
 	logScroll *container.Scroll
-	logToggle *widget.Button
+	logHeader *widget.Button // collapsible header bar (placeholder when collapsed)
 
 	// Inline config dropdown (right-aligned on the button row).
 	configSelect   *widget.Select
@@ -100,11 +100,20 @@ func newServiceTab(svc *ServiceDef, cfg *Config, win fyne.Window,
 	t.network = widget.NewLabel("")
 	topPanel := container.NewVBox(statusRow, t.network)
 
-	// --- Log panel ---
+	// --- Log panel (collapsible) ---
+	// The header bar is always visible — it acts as the placeholder when
+	// collapsed and as the title bar when expanded.  Clicking it toggles
+	// the log scroll visibility and resizes the window.
+	t.logHeader = widget.NewButton("Лог ▾", onToggleLog)
+	t.logHeader.Importance = widget.LowImportance // subtle, header-like
+
 	t.logLabel = widget.NewLabel("")
 	t.logLabel.Wrapping = fyne.TextWrapWord
 	t.logScroll = container.NewVScroll(t.logLabel)
 	t.logScroll.SetMinSize(fyne.NewSize(0, 200))
+
+	// Center: header (always visible) + scroll (hidden when collapsed).
+	logArea := container.NewVBox(t.logHeader, t.logScroll)
 
 	// --- Control buttons ---
 	t.startBtn = widget.NewButton("▶ Старт", func() {
@@ -132,10 +141,7 @@ func newServiceTab(svc *ServiceDef, cfg *Config, win fyne.Window,
 
 	settingsBtn := widget.NewButton("⚙ Настройки", onSettings)
 
-	// Log collapse toggle: hides the log panel and shrinks the window.
-	t.logToggle = widget.NewButton("📋 Лог ▾", onToggleLog)
-
-	leftBtns := container.NewHBox(t.startBtn, stopBtn, settingsBtn, t.logToggle)
+	leftBtns := container.NewHBox(t.startBtn, stopBtn, settingsBtn)
 
 	// Right side: inline config dropdown (only for services with profiles).
 	var rightSide fyne.CanvasObject
@@ -153,15 +159,12 @@ func newServiceTab(svc *ServiceDef, cfg *Config, win fyne.Window,
 		buttons = container.NewHBox(leftBtns, layout.NewSpacer())
 	}
 
-	// Layout: status + buttons at top, log fills the center.
-	// When the log is hidden (collapsed), only the top remains so the
-	// window can shrink with no empty gap between status and buttons.
-	topWithButtons := container.NewVBox(topPanel, buttons)
-
+	// Layout: status on top, buttons on bottom, collapsible log in center.
 	t.content = container.NewBorder(
-		topWithButtons, // top: status + buttons
-		nil, nil, nil,  // no bottom/sides
-		t.logScroll,    // center: scrollable log (fills remaining, hidden when collapsed)
+		topPanel,  // top: status + network
+		buttons,   // bottom: control buttons + config dropdown
+		nil, nil,
+		logArea,   // center: collapsible log header + scroll
 	)
 
 	// Initial refresh, then background loops.
@@ -198,16 +201,17 @@ func (t *serviceTab) buildConfigSelect() {
 // Content returns the root canvas object for this tab.
 func (t *serviceTab) Content() fyne.CanvasObject { return t.content }
 
-// setLogVisible shows or hides the log panel and updates the toggle label.
-// The actual window resize is handled by ProxyApp.toggleLog so both tabs
-// stay in sync.
+// setLogVisible shows or hides the log scroll and updates the header
+// chevron.  The header bar itself stays visible — it is the placeholder
+// when collapsed.  The window resize is handled by ProxyApp.toggleLog so
+// both tabs stay in sync.
 func (t *serviceTab) setLogVisible(visible bool) {
 	if visible {
 		t.logScroll.Show()
-		t.logToggle.SetText("📋 Лог ▾")
+		t.logHeader.SetText("Лог ▾")
 	} else {
 		t.logScroll.Hide()
-		t.logToggle.SetText("📋 Лог ▸")
+		t.logHeader.SetText("Лог ▸")
 	}
 }
 
