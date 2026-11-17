@@ -1,0 +1,17 @@
+# Binary
+proxycontrol
+proxycontrol.exe
+
+# Go build artifacts
+*.o
+*.a
+*.so
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
