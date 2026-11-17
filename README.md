@@ -26,7 +26,8 @@ Single binary, no runtime dependencies on Python/Node/Electron. Controls systemd
 - `systemctl --user` (systemd user session)
 - `curl` (for network connectivity checks)
 - `xdg-open` (for "open folder" buttons)
-- WireProxy and/or ByeDPI installed as systemd **user** services (`wireproxy.service`, `byedpi.service`)
+- `dbus-monitor` (for the wake-from-sleep resume monitor; optional — if absent the resume feature is skipped cleanly)
+- WireProxy and/or ByeDPI binaries at `/usr/local/bin/wireproxy` and `/usr/local/bin/byedpi`
 
 ### Build (on the development machine)
 
@@ -151,18 +152,36 @@ The app reads and writes to `~/.config/proxycontrol/`:
     └── byedpi.log             # log file
 ```
 
-### Expected systemd user units
+### systemd user units (auto-created on first launch)
 
-The app expects these user services to exist:
+On startup, ProxyControl checks whether the `wireproxy.service`, `byedpi.service`,
+and `proxycontrol-resume.service` user units exist in `~/.config/systemd/user/`.
+**Any that are missing are created automatically**, `systemctl --user daemon-reload`
+is run, and the resume monitor is enabled and started. Units that already exist are
+left untouched, so manual customisations are never overwritten.
+
+> **If you have a hand-written `wireproxy.service` with different config paths**
+> (for example `~/.config/wireproxy.conf` instead of the GUI's
+> `~/.config/proxycontrol/wireproxy/wireproxy.conf`), delete it and relaunch
+> ProxyControl to get a unit that matches the GUI's config and log layout.
+
+The generated units use the GUI's config/log paths, truncate the log on each
+(re)start, and restart on failure with a 5 s delay:
 
 **`~/.config/systemd/user/wireproxy.service`:**
 ```ini
 [Unit]
-Description=WireProxy SOCKS5 tunnel
+Description=WireProxy SOCKS5 tunnel (ProxyControl)
+After=network.target
 
 [Service]
+Type=simple
+ExecStartPre=-/bin/sh -c '> %h/.config/proxycontrol/wireproxy/wireproxy.log'
 ExecStart=/usr/local/bin/wireproxy -c %h/.config/proxycontrol/wireproxy/wireproxy.conf
 Restart=on-failure
+RestartSec=5s
+StandardOutput=file:%h/.config/proxycontrol/wireproxy/wireproxy.log
+StandardError=file:%h/.config/proxycontrol/wireproxy/wireproxy.log
 
 [Install]
 WantedBy=default.target
@@ -171,20 +190,47 @@ WantedBy=default.target
 **`~/.config/systemd/user/byedpi.service`:**
 ```ini
 [Unit]
-Description=ByeDPI SOCKS5 proxy
+Description=ByeDPI SOCKS5 proxy (ProxyControl)
+After=network.target
 
 [Service]
-ExecStart=/bin/bash -c '/usr/local/bin/byedpi -i 127.0.0.1 -p $(cat %h/.config/proxycontrol/byedpi/.port 2>/dev/null || echo 8882)'
+Type=simple
+ExecStartPre=-/bin/sh -c '> %h/.config/proxycontrol/byedpi/byedpi.log'
+ExecStart=/bin/bash -c '/usr/local/bin/byedpi -i 127.0.0.1 -p $(cat %h/.config/proxycontrol/byedpi/.port 2>/dev/null || echo 8882) $(cat %h/.config/proxycontrol/byedpi/.active_profile 2>/dev/null)'
 Restart=on-failure
+RestartSec=5s
+StandardOutput=file:%h/.config/proxycontrol/byedpi/byedpi.log
+StandardError=file:%h/.config/proxycontrol/byedpi/byedpi.log
 
 [Install]
 WantedBy=default.target
 ```
 
-After creating the units:
+The byedpi unit reads the port from `.port` and the profile args from
+`.active_profile`; both are written by the GUI when you change the port or pick
+a profile.
+
+### Restart on wake-from-sleep
+
+WireProxy cannot reconnect after the computer suspends until the process is
+restarted. ProxyControl installs a small resume monitor that fixes this:
+
+- **`~/.config/proxycontrol/proxycontrol-resume.sh`** — a shell helper that
+  subscribes to the `org.freedesktop.login1.Manager.PrepareForSleep` D-Bus
+  signal. When the argument is `false` (the system is waking up), it restarts
+  whichever proxy services were running before suspend. A service you had
+  deliberately stopped stays stopped.
+- **`~/.config/systemd/user/proxycontrol-resume.service`** — runs the helper
+  as a long-lived user service (`Restart=always`, `RestartSec=10s`).
+  `ConditionPathExists=/usr/bin/dbus-monitor` skips the start cleanly on
+  systems without `dbus-monitor`, so there is no failure loop.
+
+The resume monitor is enabled and started on every ProxyControl launch, so it
+is active even if you never open the GUI after the first run. You can inspect
+it with:
 
 ```bash
-systemctl --user daemon-reload
+systemctl --user status proxycontrol-resume.service
 ```
 
 ### Port changes
@@ -206,6 +252,7 @@ proxycontrol/
 ├── main.go         # app entry, window, tabs, settings callback
 ├── config.go       # JSON config load/save, last-tab persistence
 ├── service.go      # service definitions, systemd wrappers, log reading, port management
+├── systemd.go      # auto-create systemd user units + wake-from-sleep resume monitor
 ├── network.go      # SOCKS5 connectivity checker (curl)
 ├── tab.go          # per-service tab UI (status, log, buttons, refresh goroutines)
 ├── settings.go     # settings dialog (checkboxes, port entries, folder buttons)

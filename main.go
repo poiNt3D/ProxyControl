@@ -21,6 +21,11 @@ type ProxyApp struct {
 func main() {
 	cfg := LoadConfig()
 
+	// Make sure the systemd user units exist (wireproxy, byedpi, and the
+	// resume monitor).  Creates any that are missing, daemon-reloads, and
+	// enables+starts the resume monitor.  Idempotent — safe every launch.
+	EnsureSystemdUnits()
+
 	a := app.New()
 	a.SetIcon(nil) // TODO: bundle an icon
 
