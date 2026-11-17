@@ -1,0 +1,23 @@
+# Binary
+proxycontrol
+proxycontrol.exe
+
+# Go build artifacts
+*.o
+*.a
+*.so
+
+# Local build toolchain / deps (not committed)
+.go-sdk/
+.gldev/
+.gopath/
+.gocache/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
