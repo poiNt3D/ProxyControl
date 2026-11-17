@@ -23,9 +23,9 @@ func main() {
 	a.SetIcon(nil) // TODO: bundle an icon
 
 	w := a.NewWindow("ProxyControl")
-	w.Resize(fyne.NewSize(720, 480))
+	w.Resize(fyne.NewSize(720, logCollapsedHeight)) // start collapsed
 
-	pa := &ProxyApp{cfg: cfg, win: w}
+	pa := &ProxyApp{cfg: cfg, win: w, logCollapsed: true}
 
 	// Build both service tabs.
 	wpSvc := NewService("wireproxy", cfg)

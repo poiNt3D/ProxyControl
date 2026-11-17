@@ -85,8 +85,14 @@ func newServiceTab(svc *ServiceDef, cfg *Config, win fyne.Window,
 
 	// Colored status indicator: a canvas.Circle in a fixed-size cell so
 	// the HBox reserves space for it (canvas primitives have zero MinSize).
+	// The HBox top-aligns children, so the 14px circle would sit at the
+	// top of the ~22px text row. A transparent 6px spacer above it (plus
+	// VBox padding ≈10px total) shifts it down to align with the text.
 	t.stateDot = canvas.NewCircle(color.NRGBA{R: 200, G: 40, B: 40, A: 255}) // red initially
-	dotCell := container.NewGridWrap(fyne.NewSize(14, 14), t.stateDot)
+	dotInner := container.NewGridWrap(fyne.NewSize(14, 14), t.stateDot)
+	dotSpacer := container.NewGridWrap(fyne.NewSize(14, 6),
+		canvas.NewRectangle(color.Transparent))
+	dotCell := container.NewVBox(dotSpacer, dotInner)
 
 	t.stateText = widget.NewLabel("Остановлен")
 	t.stateText.TextStyle = fyne.TextStyle{Bold: true}
@@ -112,7 +118,8 @@ func newServiceTab(svc *ServiceDef, cfg *Config, win fyne.Window,
 	// The header bar is always visible — it acts as the placeholder when
 	// collapsed and as the title bar when expanded.  Clicking it toggles
 	// the log scroll visibility and resizes the window.
-	t.logHeader = widget.NewButton("Лог ▾", onToggleLog)
+	// The app starts with the log collapsed (Лог ▸).
+	t.logHeader = widget.NewButton("Лог ▸", onToggleLog)
 	t.logHeader.Importance = widget.LowImportance // subtle, header-like
 
 	t.logLabel = widget.NewLabel("")
@@ -163,11 +170,11 @@ func newServiceTab(svc *ServiceDef, cfg *Config, win fyne.Window,
 		t.buttonsRow = container.NewHBox(leftBtns, layout.NewSpacer())
 	}
 
-	// Build the initial content (log expanded).  buildContent is also
-	// called on every toggle — when collapsed, the scroll is omitted from
-	// the border layout entirely, so its 32px scrollContainerMinSize
-	// cannot leak into the window's minimum height.
-	t.content = t.buildContent(true)
+	// Build the initial content (log collapsed).  buildContent is also
+	// called on every toggle — when expanded, a border layout puts the
+	// scroll in the center; when collapsed, a plain VBox stacks status +
+	// header + buttons with no empty gap.
+	t.content = t.buildContent(false)
 
 	// Initial refresh, then background loops.
 	t.refreshStatus()
