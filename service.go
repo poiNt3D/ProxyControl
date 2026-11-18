@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -96,14 +97,21 @@ func (s *ServiceDef) BinaryExists() bool {
 }
 
 // RepoSlug returns the GitHub "owner/repo" slug for the service's
-// upstream project, used to query the releases API.
+// upstream project, read from the config so the user can point at a
+// fork.  Defaults are set in config.validate().
 func (s *ServiceDef) RepoSlug() string {
+	return s.cfg.RepoForService(s.Key)
+}
+
+// ArchiveBinaryName returns the name prefix of the executable inside
+// the downloaded .tar.gz.  WireProxy archives contain a file named
+// "wireproxy"; ByeDPI archives contain "ciadpi-<arch>" (the project's
+// C binary is called ciadpi, even though the service key is "byedpi").
+func (s *ServiceDef) ArchiveBinaryName() string {
 	if s.Key == "byedpi" {
-		return "hufrea/byedpi"
+		return "ciadpi"
 	}
-	// wireproxy was transferred from pufferffish/wireproxy to
-	// windtf/wireproxy; the new slug is canonical.
-	return "windtf/wireproxy"
+	return "wireproxy"
 }
 
 // AssetArch returns the architecture keyword used inside the release
@@ -138,6 +146,46 @@ func (s *ServiceDef) AssetArch() string {
 func (s *ServiceDef) SetBinaryPath(path string) {
 	s.cfg.SetPathForService(s.Key, path)
 	_ = s.cfg.Save()
+}
+
+// InstalledVersion runs the binary with --version (falling back to -v)
+// and extracts the version string from the output.  Returns "" with an
+// error if the binary is missing or does not report a version.
+func (s *ServiceDef) InstalledVersion() (string, error) {
+	if !s.BinaryExists() {
+		return "", fmt.Errorf("binary not found at %s", s.BinaryPath())
+	}
+	out, err := exec.Command(s.BinaryPath(), "--version").CombinedOutput()
+	if err != nil {
+		// byedpi/ciadpi uses -v, not --version
+		out, err = exec.Command(s.BinaryPath(), "-v").CombinedOutput()
+		if err != nil {
+			return "", fmt.Errorf("cannot get version: %w", err)
+		}
+	}
+	v := extractVersionString(string(out))
+	if v == "" {
+		return "", fmt.Errorf("no version in output: %q", string(out))
+	}
+	return v, nil
+}
+
+// CheckForUpdate compares the installed binary's version with the latest
+// GitHub release tag.  Returns the current version, the latest tag, and
+// whether an update is available.  The comparison normalises leading
+// zeros (e.g. tag "v0.17.3" vs binary "17.3" → equal, no update).
+func (s *ServiceDef) CheckForUpdate() (current, latest string, available bool, err error) {
+	current, err = s.InstalledVersion()
+	if err != nil {
+		return
+	}
+	rel, err := s.FetchLatestRelease()
+	if err != nil {
+		return
+	}
+	latest = rel.TagName
+	available = normalizeVersion(current) != normalizeVersion(latest)
+	return
 }
 
 // --- systemd (user) wrappers ----------------------------------------------

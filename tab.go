@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"image/color"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -312,9 +313,30 @@ func (t *serviceTab) onSelectBinary() {
 }
 
 // onDownloadBinary fetches the latest GitHub release, downloads + extracts
-// the binary, then asks where to install it.  A progress dialog is shown
-// during the download.
+// the binary, then asks where to install it.  Used in install mode (binary
+// missing).  A progress dialog is shown during the download.
 func (t *serviceTab) onDownloadBinary() {
+	t.downloadWithProgress(func(tmp string) {
+		t.askInstallLocation(tmp)
+	})
+}
+
+// onUpdateBinary downloads the latest release and installs it over the
+// existing binary (same path).  Used when an update is available.  The
+// install location is inferred from the current path: /usr/local/bin →
+// system-wide (sudo), anything else → user-local.
+func (t *serviceTab) onUpdateBinary() {
+	destPath := t.svc.BinaryPath()
+	t.downloadWithProgress(func(tmp string) {
+		t.doInstall(tmp, destPath)
+	})
+}
+
+// downloadWithProgress shows a progress dialog, fetches the latest
+// release, downloads + extracts the binary, then calls onDone with the
+// temp file path (the callback owns cleanup via doInstall).  On error
+// it hides the dialog and shows the error.
+func (t *serviceTab) downloadWithProgress(onDone func(tmpBinary string)) {
 	progress := widget.NewProgressBar()
 	progress.Min = 0
 	progress.Max = 1
@@ -345,7 +367,7 @@ func (t *serviceTab) onDownloadBinary() {
 			return
 		}
 		dlg.Hide()
-		t.askInstallLocation(tmp)
+		onDone(tmp)
 	}()
 }
 
@@ -358,10 +380,10 @@ func (t *serviceTab) askInstallLocation(tmpBinary string) {
 	systemDir := SystemBinDir()
 
 	userBtn := widget.NewButton(fmt.Sprintf("📂 %s (без sudo)", userDir), func() {
-		t.doInstall(tmpBinary, false)
+		t.doInstall(tmpBinary, userDir+"/"+t.svc.BinaryName())
 	})
 	systemBtn := widget.NewButton(fmt.Sprintf("🔐 %s (sudo)", systemDir), func() {
-		t.doInstall(tmpBinary, true)
+		t.doInstall(tmpBinary, systemDir+"/"+t.svc.BinaryName())
 	})
 
 	msg := widget.NewLabel("Куда установить бинарный файл?")
@@ -372,16 +394,13 @@ func (t *serviceTab) askInstallLocation(tmpBinary string) {
 	dlg.Show()
 }
 
-// doInstall copies the temp binary to the chosen destination, finalises
-// the config + unit, and rebuilds the tab.  systemWide triggers the
-// pkexec/sudo path.  A busy dialog is shown during the (potentially
-// blocking) privileged copy.
-func (t *serviceTab) doInstall(tmpBinary string, systemWide bool) {
-	destDir := UserBinDir()
-	if systemWide {
-		destDir = SystemBinDir()
-	}
-	destPath := destDir + "/" + t.svc.BinaryName()
+// doInstall copies the temp binary to destPath (full path including the
+// file name), finalises the config + unit, and rebuilds the tab.
+// systemWide is inferred from the destination path prefix
+// (/usr/local/bin → privileged).  A busy dialog is shown during the
+// potentially blocking privileged copy.
+func (t *serviceTab) doInstall(tmpBinary, destPath string) {
+	systemWide := strings.HasPrefix(destPath, SystemBinDir())
 
 	dlg := dialog.NewCustomWithoutButtons(
 		"Установка…", widget.NewLabel("Копирование файла…"), t.win)
@@ -391,7 +410,7 @@ func (t *serviceTab) doInstall(tmpBinary string, systemWide bool) {
 
 	go func() {
 		err := InstallBinary(tmpBinary, destPath, systemWide)
-		os.Remove(tmpBinary)
+		_ = os.Remove(tmpBinary)
 		if systemWide {
 			dlg.Hide()
 		}

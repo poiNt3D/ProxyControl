@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"strconv"
+	"strings"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/dialog"
@@ -10,8 +11,9 @@ import (
 )
 
 // showSettingsDialog opens a modal form with autostart checkboxes, port
-// entries, and "open folder" buttons for each service.  When the user
-// clicks "Применить" the changes are persisted and applied to systemd.
+// entries, fork-slug fields, an update-check toggle, and "open folder"
+// buttons for each service.  When the user clicks "Применить" the changes
+// are persisted and applied to systemd.
 func showSettingsDialog(win fyne.Window, cfg *Config, onApplied func()) {
 	wpSvc := NewService("wireproxy", cfg)
 	bdSvc := NewService("byedpi", cfg)
@@ -23,6 +25,10 @@ func showSettingsDialog(win fyne.Window, cfg *Config, onApplied func()) {
 	wpPortEntry := widget.NewEntry()
 	wpPortEntry.SetText(strconv.Itoa(cfg.WPPort))
 	wpPortEntry.Validator = portValidator
+
+	wpRepoEntry := widget.NewEntry()
+	wpRepoEntry.SetText(cfg.WPRepo)
+	wpRepoEntry.PlaceHolder = "owner/repo"
 
 	wpFolderBtn := widget.NewButton("Открыть", func() {
 		wpSvc.OpenConfigDir()
@@ -36,17 +42,28 @@ func showSettingsDialog(win fyne.Window, cfg *Config, onApplied func()) {
 	bdPortEntry.SetText(strconv.Itoa(cfg.BDPort))
 	bdPortEntry.Validator = portValidator
 
+	bdRepoEntry := widget.NewEntry()
+	bdRepoEntry.SetText(cfg.BDRepo)
+	bdRepoEntry.PlaceHolder = "owner/repo"
+
 	bdFolderBtn := widget.NewButton("Открыть", func() {
 		bdSvc.OpenConfigDir()
 	})
 
+	// --- Update check ---
+	checkUpdatesCheck := widget.NewCheck("проверять обновления бинарных файлов при запуске", nil)
+	checkUpdatesCheck.SetChecked(cfg.CheckUpdates)
+
 	items := []*widget.FormItem{
 		{Text: "Автозапуск WireProxy", Widget: wpAutoCheck},
 		{Text: "Порт WireProxy (SOCKS5)", Widget: wpPortEntry},
+		{Text: "Форк WireProxy (GitHub)", Widget: wpRepoEntry},
 		{Text: "Папка WireProxy", Widget: wpFolderBtn},
 		{Text: "Автозапуск ByeDPI", Widget: bdAutoCheck},
 		{Text: "Порт ByeDPI (SOCKS5)", Widget: bdPortEntry},
+		{Text: "Форк ByeDPI (GitHub)", Widget: bdRepoEntry},
 		{Text: "Папка ByeDPI", Widget: bdFolderBtn},
+		{Text: "Обновления", Widget: checkUpdatesCheck},
 	}
 
 	d := dialog.NewForm(
@@ -58,20 +75,24 @@ func showSettingsDialog(win fyne.Window, cfg *Config, onApplied func()) {
 				return
 			}
 			applySettings(cfg, wpSvc, bdSvc,
-				wpAutoCheck.Checked, wpPortEntry.Text,
-				bdAutoCheck.Checked, bdPortEntry.Text)
+				wpAutoCheck.Checked, wpPortEntry.Text, wpRepoEntry.Text,
+				bdAutoCheck.Checked, bdPortEntry.Text, bdRepoEntry.Text,
+				checkUpdatesCheck.Checked)
 			onApplied()
 		},
 		win,
 	)
-	d.Resize(fyne.NewSize(480, 380))
+	d.Resize(fyne.NewSize(520, 460))
 	d.Show()
 }
 
-// applySettings persists port changes, applies them to the service config
-// files (restarting if active), and enables/disables autostart.
+// applySettings persists port, fork and update-check changes, applies
+// port changes to the service config files (restarting if active), and
+// enables/disables autostart.
 func applySettings(cfg *Config, wpSvc, bdSvc *ServiceDef,
-	wpAuto bool, wpPortStr string, bdAuto bool, bdPortStr string) {
+	wpAuto bool, wpPortStr, wpRepo string,
+	bdAuto bool, bdPortStr, bdRepo string,
+	checkUpdates bool) {
 
 	// WireProxy port
 	if wpPort, err := strconv.Atoi(wpPortStr); err == nil && wpPort >= 1 && wpPort <= 65535 {
@@ -86,6 +107,11 @@ func applySettings(cfg *Config, wpSvc, bdSvc *ServiceDef,
 			_ = bdSvc.ApplyPort(bdPort)
 		}
 	}
+
+	// Fork slugs (strip whitespace; empty falls back to default on next load)
+	cfg.WPRepo = strings.TrimSpace(wpRepo)
+	cfg.BDRepo = strings.TrimSpace(bdRepo)
+	cfg.CheckUpdates = checkUpdates
 
 	// Save config (JSON)
 	_ = cfg.Save()

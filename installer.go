@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -135,7 +136,7 @@ func (s *ServiceDef) DownloadAndExtract(rel *githubRelease, onProgress func(done
 		return "", err
 	}
 	defer os.Remove(tarball)
-	return extractBinary(tarball, s.BinaryName())
+	return extractBinary(tarball, s.ArchiveBinaryName())
 }
 
 func downloadAsset(asset *githubAsset, onProgress func(done, total int64)) (string, error) {
@@ -161,10 +162,12 @@ func downloadAsset(asset *githubAsset, onProgress func(done, total int64)) (stri
 	return tmp.Name(), nil
 }
 
-// extractBinary pulls the file named binaryName out of a .tar.gz into a
-// new temp file and returns its path.  The base name is matched so an
-// archive that nests the binary in a subdirectory still works.
-func extractBinary(tarballPath, binaryName string) (string, error) {
+// extractBinary pulls the executable out of a .tar.gz into a new temp
+// file and returns its path.  namePrefix is matched as a prefix on the
+// base name so it handles both "wireproxy" (exact) and "ciadpi-x86_64"
+// (prefix) — the byedpi archive ships its binary as ciadpi-<arch>, not
+// byedpi.
+func extractBinary(tarballPath, namePrefix string) (string, error) {
 	f, err := os.Open(tarballPath)
 	if err != nil {
 		return "", err
@@ -184,7 +187,8 @@ func extractBinary(tarballPath, binaryName string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		if filepath.Base(hdr.Name) == binaryName && hdr.Typeflag == tar.TypeReg {
+		base := filepath.Base(hdr.Name)
+		if strings.HasPrefix(base, namePrefix) && hdr.Typeflag == tar.TypeReg {
 			out, err := os.CreateTemp("", "proxycontrol-bin-*")
 			if err != nil {
 				return "", err
@@ -199,7 +203,7 @@ func extractBinary(tarballPath, binaryName string) (string, error) {
 			return out.Name(), nil
 		}
 	}
-	return "", fmt.Errorf("бинарный файл %q не найден в архиве", binaryName)
+	return "", fmt.Errorf("бинарный файл %q не найден в архиве", namePrefix)
 }
 
 // --- install ---------------------------------------------------------------
@@ -267,4 +271,32 @@ func privilegedCopy(src, dst string) error {
 func (s *ServiceDef) FinalizeInstall(destPath string) {
 	s.SetBinaryPath(destPath)
 	UpdateUnitBinaryPath(s)
+}
+
+// --- version parsing ------------------------------------------------------
+
+// versionRe matches a dotted version number like "1.0.18" or "17.3".
+var versionRe = regexp.MustCompile(`\d+(\.\d+)*`)
+
+// extractVersionString pulls the first dotted-number sequence out of a
+// binary's --version output.  Handles "wireproxy, version 1.0.18"
+// → "1.0.18" and bare "17.3" → "17.3".
+func extractVersionString(output string) string {
+	return versionRe.FindString(output)
+}
+
+// normalizeVersion strips a leading "v" and removes leading zero
+// components so that tags and binary output can be compared despite
+// different conventions.  Examples:
+//
+//	"v0.17.3" → "17.3"   (byedpi tag has a 0. prefix the binary drops)
+//	"v1.0.18" → "1.0.18" (wireproxy tag and binary agree)
+//	"17.3"    → "17.3"
+func normalizeVersion(v string) string {
+	v = strings.TrimPrefix(v, "v")
+	parts := strings.Split(v, ".")
+	for len(parts) > 1 && parts[0] == "0" {
+		parts = parts[1:]
+	}
+	return strings.Join(parts, ".")
 }

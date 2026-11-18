@@ -18,15 +18,23 @@ const (
 	// shows the install buttons instead of the normal controls.
 	defaultWPPath = "/usr/local/bin/wireproxy"
 	defaultBDPath = "/usr/local/bin/byedpi"
+	// Default upstream repos.  WireProxy defaults to the AWG fork
+	// (artem-russkikh/wireproxy-awg) which adds AmneziaWG support;
+	// ByeDPI defaults to the official repo.
+	defaultWPRepo = "artem-russkikh/wireproxy-awg"
+	defaultBDRepo = "hufrea/byedpi"
 )
 
 // Config holds the persistent application settings.
 // Stored as JSON at ~/.config/proxycontrol/proxycontrol.conf.
 type Config struct {
-	WPPort int    `json:"wp_port"`
-	BDPort int    `json:"bd_port"`
-	WPPath string `json:"wp_path"` // wireproxy binary path
-	BDPath string `json:"bd_path"` // byedpi binary path
+	WPPort       int    `json:"wp_port"`
+	BDPort       int    `json:"bd_port"`
+	WPPath       string `json:"wp_path"`       // wireproxy binary path
+	BDPath       string `json:"bd_path"`       // byedpi binary path
+	WPRepo       string `json:"wp_repo"`       // wireproxy GitHub fork slug
+	BDRepo       string `json:"bd_repo"`       // byedpi GitHub fork slug
+	CheckUpdates bool   `json:"check_updates"` // check for binary updates on startup
 }
 
 // configDir returns ~/.config/proxycontrol (the same dir the bash version used).
@@ -106,6 +114,12 @@ func (cfg *Config) validate() {
 	if cfg.BDPath == "" {
 		cfg.BDPath = defaultBDPath
 	}
+	if cfg.WPRepo == "" {
+		cfg.WPRepo = defaultWPRepo
+	}
+	if cfg.BDRepo == "" {
+		cfg.BDRepo = defaultBDRepo
+	}
 }
 
 // Save writes the config as pretty-printed JSON.
@@ -166,6 +180,25 @@ func (cfg *Config) SetPathForService(key, path string) {
 		cfg.BDPath = path
 	} else {
 		cfg.WPPath = path
+	}
+}
+
+// RepoForService returns the configured GitHub fork slug ("owner/repo")
+// for the given service key.  Never empty — validate() fills in the
+// default.
+func (cfg *Config) RepoForService(key string) string {
+	if key == "byedpi" {
+		return cfg.BDRepo
+	}
+	return cfg.WPRepo
+}
+
+// SetRepoForService updates the GitHub fork slug for the given service.
+func (cfg *Config) SetRepoForService(key, slug string) {
+	if key == "byedpi" {
+		cfg.BDRepo = slug
+	} else {
+		cfg.WPRepo = slug
 	}
 }
 
