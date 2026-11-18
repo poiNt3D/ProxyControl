@@ -27,6 +27,10 @@ func main() {
 		testInstaller()
 		return
 	}
+	if len(os.Args) > 1 && os.Args[1] == "--test-profiles" {
+		testProfiles()
+		return
+	}
 
 	cfg := LoadConfig()
 
@@ -303,4 +307,17 @@ func testInstaller() {
 	}
 
 	fmt.Println("\nDONE")
+}
+
+// testProfiles prints the config profiles found for each service, to
+// verify that .conf files are now listed for byedpi (not just .txt).
+// Triggered by `proxycontrol --test-profiles`.
+func testProfiles() {
+	cfg := LoadConfig()
+	for _, key := range []string{"wireproxy", "byedpi"} {
+		svc := NewService(key, cfg)
+		exts := svc.configExts()
+		profiles := svc.Profiles()
+		fmt.Printf("%s: exts=%v profiles=%v\n", svc.Label, exts, profiles)
+	}
 }

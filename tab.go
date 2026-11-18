@@ -309,6 +309,7 @@ func (t *serviceTab) onSelectBinary() {
 		UpdateUnitBinaryPath(t.svc)
 		t.rebuildForBinaryState()
 	}, t.win)
+	dlg.Resize(fyne.NewSize(800, 600))
 	dlg.Show()
 }
 
@@ -379,10 +380,15 @@ func (t *serviceTab) askInstallLocation(tmpBinary string) {
 	userDir := UserBinDir()
 	systemDir := SystemBinDir()
 
+	// Declare up front so the button closures can hide the dialog.
+	var dlg *dialog.CustomDialog
+
 	userBtn := widget.NewButton(fmt.Sprintf("📂 %s (без sudo)", userDir), func() {
+		dlg.Hide()
 		t.doInstall(tmpBinary, userDir+"/"+t.svc.BinaryName())
 	})
 	systemBtn := widget.NewButton(fmt.Sprintf("🔐 %s (sudo)", systemDir), func() {
+		dlg.Hide()
 		t.doInstall(tmpBinary, systemDir+"/"+t.svc.BinaryName())
 	})
 
@@ -390,7 +396,7 @@ func (t *serviceTab) askInstallLocation(tmpBinary string) {
 	msg.Alignment = fyne.TextAlignCenter
 
 	content := container.NewVBox(msg, userBtn, systemBtn)
-	dlg := dialog.NewCustomWithoutButtons("Установка", content, t.win)
+	dlg = dialog.NewCustomWithoutButtons("Установка", content, t.win)
 	dlg.Show()
 }
 
