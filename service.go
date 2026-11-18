@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -68,6 +69,76 @@ func NewService(key string, cfg *Config) *ServiceDef {
 
 // Port returns the currently configured port for this service.
 func (s *ServiceDef) Port() int { return s.cfg.PortForService(s.Key) }
+
+// BinaryPath returns the configured on-disk path of the service's
+// executable (read from the config file).
+func (s *ServiceDef) BinaryPath() string { return s.cfg.PathForService(s.Key) }
+
+// BinaryName returns just the executable file name ("wireproxy" or
+// "byedpi") — used as the file to extract from the downloaded archive.
+func (s *ServiceDef) BinaryName() string {
+	if s.Key == "byedpi" {
+		return "byedpi"
+	}
+	return "wireproxy"
+}
+
+// BinaryExists reports whether the configured binary is present and is
+// a regular file (not a directory).  When this is false the tab shows
+// the install buttons instead of the normal controls.
+func (s *ServiceDef) BinaryExists() bool {
+	p := s.BinaryPath()
+	if p == "" {
+		return false
+	}
+	info, err := os.Stat(p)
+	return err == nil && !info.IsDir()
+}
+
+// RepoSlug returns the GitHub "owner/repo" slug for the service's
+// upstream project, used to query the releases API.
+func (s *ServiceDef) RepoSlug() string {
+	if s.Key == "byedpi" {
+		return "hufrea/byedpi"
+	}
+	// wireproxy was transferred from pufferffish/wireproxy to
+	// windtf/wireproxy; the new slug is canonical.
+	return "windtf/wireproxy"
+}
+
+// AssetArch returns the architecture keyword used inside the release
+// asset file name for the running platform.
+func (s *ServiceDef) AssetArch() string {
+	if s.Key == "wireproxy" {
+		switch runtime.GOARCH {
+		case "arm64":
+			return "linux_arm64"
+		case "arm":
+			return "linux_arm"
+		case "386":
+			return "linux_386"
+		default:
+			return "linux_amd64"
+		}
+	}
+	// byedpi
+	switch runtime.GOARCH {
+	case "arm64":
+		return "aarch64"
+	case "arm":
+		return "armv7l"
+	case "386":
+		return "i686"
+	default:
+		return "x86_64"
+	}
+}
+
+// SetBinaryPath persists a new binary path to the config and saves it.
+func (s *ServiceDef) SetBinaryPath(path string) {
+	s.cfg.SetPathForService(s.Key, path)
+	_ = s.cfg.Save()
+}
 
 // --- systemd (user) wrappers ----------------------------------------------
 

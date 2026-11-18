@@ -13,13 +13,20 @@ import (
 const (
 	defaultWPPort = 8883
 	defaultBDPort = 8882
+	// Default binary locations — used when the config does not yet
+	// record a path.  If the file is not actually present there the tab
+	// shows the install buttons instead of the normal controls.
+	defaultWPPath = "/usr/local/bin/wireproxy"
+	defaultBDPath = "/usr/local/bin/byedpi"
 )
 
 // Config holds the persistent application settings.
 // Stored as JSON at ~/.config/proxycontrol/proxycontrol.conf.
 type Config struct {
-	WPPort int `json:"wp_port"`
-	BDPort int `json:"bd_port"`
+	WPPort int    `json:"wp_port"`
+	BDPort int    `json:"bd_port"`
+	WPPath string `json:"wp_path"` // wireproxy binary path
+	BDPath string `json:"bd_path"` // byedpi binary path
 }
 
 // configDir returns ~/.config/proxycontrol (the same dir the bash version used).
@@ -93,6 +100,12 @@ func (cfg *Config) validate() {
 	if cfg.BDPort < 1 || cfg.BDPort > 65535 {
 		cfg.BDPort = defaultBDPort
 	}
+	if cfg.WPPath == "" {
+		cfg.WPPath = defaultWPPath
+	}
+	if cfg.BDPath == "" {
+		cfg.BDPath = defaultBDPath
+	}
 }
 
 // Save writes the config as pretty-printed JSON.
@@ -135,6 +148,24 @@ func (cfg *Config) SetPortForService(key string, port int) {
 		cfg.BDPort = port
 	} else {
 		cfg.WPPort = port
+	}
+}
+
+// PathForService returns the configured binary path for the given
+// service key.  Never empty — validate() fills in the default.
+func (cfg *Config) PathForService(key string) string {
+	if key == "byedpi" {
+		return cfg.BDPath
+	}
+	return cfg.WPPath
+}
+
+// SetPathForService updates the binary path for the given service key.
+func (cfg *Config) SetPathForService(key, path string) {
+	if key == "byedpi" {
+		cfg.BDPath = path
+	} else {
+		cfg.WPPath = path
 	}
 }
 

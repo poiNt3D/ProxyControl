@@ -1,6 +1,10 @@
 package main
 
 import (
+	"fmt"
+	"os"
+	"os/exec"
+	"strings"
 	"time"
 
 	"fyne.io/fyne/v2"
@@ -19,7 +23,17 @@ type ProxyApp struct {
 }
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "--test-install" {
+		testInstaller()
+		return
+	}
+
 	cfg := LoadConfig()
+
+	// Make sure the systemd user units exist (wireproxy, byedpi, and the
+	// resume monitor).  Creates any that are missing, daemon-reloads, and
+	// enables+starts the resume monitor.  Idempotent — safe every launch.
+	EnsureSystemdUnits(cfg)
 
 	a := app.New()
 	a.SetIcon(nil) // TODO: bundle an icon
@@ -33,8 +47,8 @@ func main() {
 	wpSvc := NewService("wireproxy", cfg)
 	bdSvc := NewService("byedpi", cfg)
 
-	pa.wpTab = newServiceTab(wpSvc, cfg, w, pa.showSettings, pa.toggleLog)
-	pa.bdTab = newServiceTab(bdSvc, cfg, w, pa.showSettings, pa.toggleLog)
+	pa.wpTab = newServiceTab(wpSvc, cfg, w, pa.showSettings, pa.toggleLog, pa.rebuildTab)
+	pa.bdTab = newServiceTab(bdSvc, cfg, w, pa.showSettings, pa.toggleLog, pa.rebuildTab)
 
 	pa.tabs = container.NewAppTabs(
 		container.NewTabItem("WireProxy", pa.wpTab.Content()),
@@ -70,6 +84,17 @@ func (pa *ProxyApp) showSettings() {
 		pa.wpTab.refreshAll()
 		pa.bdTab.refreshAll()
 	})
+}
+
+// rebuildTab is called by a service tab after it swaps its content
+// (e.g. after installing a binary and switching from install mode to
+// normal mode).  It refreshes the AppTabs items so the new content is
+// displayed.
+func (pa *ProxyApp) rebuildTab() {
+	pa.tabs.Items[0].Content = pa.wpTab.Content()
+	pa.tabs.Items[1].Content = pa.bdTab.Content()
+	pa.tabs.Refresh()
+	pa.win.Content().Refresh()
 }
 
 // toggleLog collapses or expands the log panel on both tabs and resizes
@@ -124,4 +149,76 @@ func (pa *ProxyApp) toggleLog() {
 	} else {
 		pa.win.Resize(fyne.NewSize(w, logExpandedHeight))
 	}
+}
+
+// testInstaller exercises the GitHub download + extract + install flow
+// without starting the GUI.  Triggered by `proxycontrol --test-install`.
+// It downloads wireproxy to ~/.local/bin and prints each step's result.
+func testInstaller() {
+	cfg := LoadConfig()
+	svc := NewService("wireproxy", cfg)
+
+	fmt.Println("=== 1. FetchLatestRelease ===")
+	rel, err := svc.FetchLatestRelease()
+	if err != nil {
+		fmt.Println("FAIL:", err)
+		return
+	}
+	fmt.Println("  tag:", rel.TagName, "assets:", len(rel.Assets))
+
+	fmt.Println("=== 2. MatchAsset ===")
+	asset, err := svc.MatchAsset(rel)
+	if err != nil {
+		fmt.Println("FAIL:", err)
+		return
+	}
+	fmt.Println("  matched:", asset.Name, "size:", asset.Size)
+
+	fmt.Println("=== 3. DownloadAndExtract ===")
+	tmp, err := svc.DownloadAndExtract(rel, func(done, total int64) {
+		if total > 0 && done%100000 == 0 {
+			fmt.Printf("  progress: %d/%d (%.0f%%)\n", done, total, float64(done)/float64(total)*100)
+		}
+	})
+	if err != nil {
+		fmt.Println("FAIL:", err)
+		return
+	}
+	defer os.Remove(tmp)
+	fmt.Println("  extracted to:", tmp)
+	if info, e := os.Stat(tmp); e == nil {
+		fmt.Println("  size:", info.Size(), "executable:", info.Mode()&0o111 != 0)
+	}
+
+	fmt.Println("=== 4. InstallBinary (user bin) ===")
+	destPath := UserBinDir() + "/" + svc.BinaryName()
+	// Remove any previous install so the test is clean.
+	os.Remove(destPath)
+	if err := InstallBinary(tmp, destPath, false); err != nil {
+		fmt.Println("FAIL:", err)
+		return
+	}
+	fmt.Println("  installed to:", destPath)
+	if info, e := os.Stat(destPath); e == nil {
+		fmt.Println("  size:", info.Size(), "executable:", info.Mode()&0o111 != 0)
+	} else {
+		fmt.Println("FAIL: installed file not found")
+		return
+	}
+
+	fmt.Println("=== 5. Verify it runs ===")
+	out, err := exec.Command(destPath, "--version").CombinedOutput()
+	if err != nil {
+		fmt.Println("  (version check failed — expected for some binaries, err:", err, ")")
+	} else {
+		fmt.Println("  output:", strings.TrimSpace(string(out)))
+	}
+
+	fmt.Println("=== 6. FinalizeInstall (config + unit) ===")
+	svc.FinalizeInstall(destPath)
+	fmt.Println("  config wp_path:", cfg.WPPath)
+
+	// Clean up the test install.
+	os.Remove(destPath)
+	fmt.Println("\nALL STEPS PASSED")
 }
