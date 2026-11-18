@@ -46,6 +46,7 @@ func EnsureSystemdUnits(cfg *Config) {
 
 	wpSvc := NewService("wireproxy", cfg)
 	bdSvc := NewService("byedpi", cfg)
+	ndSvc := NewService("nodpi", cfg)
 
 	// The resume helper script lives next to the configs so it is easy
 	// to inspect or edit.  It is invoked by proxycontrol-resume.service.
@@ -54,8 +55,12 @@ func EnsureSystemdUnits(cfg *Config) {
 	created := false
 	created = writeIfMissing(filepath.Join(dir, wpSvc.UnitName), unitContent(wpSvc)) || created
 	created = writeIfMissing(filepath.Join(dir, bdSvc.UnitName), unitContent(bdSvc)) || created
+	created = writeIfMissing(filepath.Join(dir, ndSvc.UnitName), unitContent(ndSvc)) || created
 	created = writeIfMissing(resumeScriptPath, resumeMonitorScript) || created
 	created = writeIfMissing(filepath.Join(dir, resumeUnitName), resumeMonitorUnit) || created
+
+	// Write the default NoDPI config (.active_profile) if none exists.
+	ndSvc.EnsureDefaultConfig()
 
 	if created {
 		// Tell systemd to re-read the unit files we just dropped in.
@@ -95,8 +100,11 @@ func UpdateUnitBinaryPath(svc *ServiceDef) {
 // unitContent returns the full unit file body for the service, with
 // the ExecStart line pointing at the configured binary path.
 func unitContent(svc *ServiceDef) string {
-	if svc.Key == "byedpi" {
+	switch svc.Key {
+	case "byedpi":
 		return byedpiUnitContent(svc.BinaryPath())
+	case "nodpi":
+		return nodpiUnitContent(svc.BinaryPath())
 	}
 	return wireproxyUnitContent(svc.BinaryPath())
 }
@@ -167,6 +175,33 @@ WantedBy=default.target
 `
 }
 
+// nodpiUnitContent builds the systemd user unit for the NoDPI HTTP proxy.
+// The full command-line arguments (including --host, --port, --quiet and
+// the chosen profile args) are read from .active_profile, which is
+// written either by EnsureDefaultConfig (on first launch) or when the
+// user picks a profile.  This differs from byedpi, where the port is
+// injected separately via a .port file — nodpi keeps everything in one
+// place because its default profile is self-contained.
+func nodpiUnitContent(binPath string) string {
+	return generatedMarker + `
+[Unit]
+Description=NoDPI HTTP proxy (ProxyControl)
+After=network.target
+
+[Service]
+Type=simple
+ExecStartPre=-/bin/sh -c '> %h/.config/proxycontrol/nodpi/nodpi.log'
+ExecStart=/bin/bash -c '` + binPath + ` $(cat %h/.config/proxycontrol/nodpi/.active_profile 2>/dev/null)'
+Restart=on-failure
+RestartSec=5s
+StandardOutput=file:%h/.config/proxycontrol/nodpi/nodpi.log
+StandardError=file:%h/.config/proxycontrol/nodpi/nodpi.log
+
+[Install]
+WantedBy=default.target
+`
+}
+
 // resumeMonitorScript is the shell helper run by proxycontrol-resume.service.
 // It subscribes to the login1 PrepareForSleep D-Bus signal and restarts
 // whichever proxy services were running before suspend, so WireProxy and
@@ -193,7 +228,7 @@ while IFS= read -r line; do
 	if [ "$waiting" = true ]; then
 		case "$line" in
 			*boolean*false*)
-				for svc in wireproxy.service byedpi.service; do
+				for svc in wireproxy.service byedpi.service nodpi.service; do
 					if systemctl --user is-active --quiet "$svc" 2>/dev/null; then
 						systemctl --user restart "$svc" 2>/dev/null
 					fi

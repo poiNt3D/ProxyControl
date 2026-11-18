@@ -19,6 +19,7 @@ type ProxyApp struct {
 	tabs         *container.AppTabs
 	wpTab        *serviceTab
 	bdTab        *serviceTab
+	ndTab        *serviceTab
 	logCollapsed bool
 }
 
@@ -47,22 +48,28 @@ func main() {
 
 	pa := &ProxyApp{cfg: cfg, win: w, logCollapsed: true}
 
-	// Build both service tabs.
+	// Build all three service tabs.
 	wpSvc := NewService("wireproxy", cfg)
 	bdSvc := NewService("byedpi", cfg)
+	ndSvc := NewService("nodpi", cfg)
 
 	pa.wpTab = newServiceTab(wpSvc, cfg, w, pa.showSettings, pa.toggleLog, pa.rebuildTab)
 	pa.bdTab = newServiceTab(bdSvc, cfg, w, pa.showSettings, pa.toggleLog, pa.rebuildTab)
+	pa.ndTab = newServiceTab(ndSvc, cfg, w, pa.showSettings, pa.toggleLog, pa.rebuildTab)
 
 	pa.tabs = container.NewAppTabs(
 		container.NewTabItem("WireProxy", pa.wpTab.Content()),
 		container.NewTabItem("ByeDPI", pa.bdTab.Content()),
+		container.NewTabItem("NoDPI", pa.ndTab.Content()),
 	)
 	pa.tabs.SetTabLocation(container.TabLocationTop)
 
 	// Restore the last-selected tab.
-	if LoadLastTab() == "byedpi" {
+	switch LoadLastTab() {
+	case "byedpi":
 		pa.tabs.SelectIndex(1)
+	case "nodpi":
+		pa.tabs.SelectIndex(2)
 	}
 
 	// Persist tab selection on change.
@@ -72,6 +79,8 @@ func main() {
 			SaveLastTab("wireproxy")
 		case "ByeDPI":
 			SaveLastTab("byedpi")
+		case "NoDPI":
+			SaveLastTab("nodpi")
 		}
 	}
 
@@ -101,6 +110,7 @@ func (pa *ProxyApp) showSettings() {
 	showSettingsDialog(pa.win, pa.cfg, func() {
 		pa.wpTab.refreshAll()
 		pa.bdTab.refreshAll()
+		pa.ndTab.refreshAll()
 	})
 }
 
@@ -111,6 +121,7 @@ func (pa *ProxyApp) showSettings() {
 func (pa *ProxyApp) rebuildTab() {
 	pa.tabs.Items[0].Content = pa.wpTab.Content()
 	pa.tabs.Items[1].Content = pa.bdTab.Content()
+	pa.tabs.Items[2].Content = pa.ndTab.Content()
 	pa.tabs.Refresh()
 	pa.win.Content().Refresh()
 }
@@ -137,7 +148,7 @@ func (pa *ProxyApp) checkUpdatesOnStartup() {
 	time.Sleep(2 * time.Second)
 
 	var updates []updateInfo
-	for _, tab := range []*serviceTab{pa.wpTab, pa.bdTab} {
+	for _, tab := range []*serviceTab{pa.wpTab, pa.bdTab, pa.ndTab} {
 		if !tab.svc.BinaryExists() {
 			continue
 		}
@@ -195,11 +206,13 @@ func (pa *ProxyApp) toggleLog() {
 	visible := !pa.logCollapsed
 	pa.wpTab.setLogVisible(visible)
 	pa.bdTab.setLogVisible(visible)
+	pa.ndTab.setLogVisible(visible)
 
 	// The tab content was rebuilt — update the AppTabs items so the
 	// new content (with or without the scroll) is displayed.
 	pa.tabs.Items[0].Content = pa.wpTab.Content()
 	pa.tabs.Items[1].Content = pa.bdTab.Content()
+	pa.tabs.Items[2].Content = pa.ndTab.Content()
 	pa.tabs.Refresh()
 	// Force the content to drop any cached layout from the previous
 	// (expanded) state before we measure its minimum, otherwise MinSize
@@ -249,7 +262,7 @@ func (pa *ProxyApp) toggleLog() {
 func testInstaller() {
 	cfg := LoadConfig()
 
-	for _, key := range []string{"wireproxy", "byedpi"} {
+	for _, key := range []string{"wireproxy", "byedpi", "nodpi"} {
 		fmt.Printf("\n========== %s ==========\n", key)
 		svc := NewService(key, cfg)
 		fmt.Println("repo:", svc.RepoSlug(), "archive binary:", svc.ArchiveBinaryName())
@@ -314,7 +327,7 @@ func testInstaller() {
 // Triggered by `proxycontrol --test-profiles`.
 func testProfiles() {
 	cfg := LoadConfig()
-	for _, key := range []string{"wireproxy", "byedpi"} {
+	for _, key := range []string{"wireproxy", "byedpi", "nodpi"} {
 		svc := NewService(key, cfg)
 		exts := svc.configExts()
 		profiles := svc.Profiles()

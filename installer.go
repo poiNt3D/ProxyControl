@@ -2,6 +2,7 @@ package main
 
 import (
 	"archive/tar"
+	"archive/zip"
 	"compress/gzip"
 	"encoding/json"
 	"fmt"
@@ -82,12 +83,13 @@ func (s *ServiceDef) FetchLatestRelease() (*githubRelease, error) {
 }
 
 // MatchAsset finds the release asset matching the running platform.
-// It looks for a .tar.gz whose name contains the service's arch keyword.
+// It looks for a .tar.gz or .zip whose name contains the service's arch
+// keyword.
 func (s *ServiceDef) MatchAsset(rel *githubRelease) (*githubAsset, error) {
 	arch := s.AssetArch()
 	for i := range rel.Assets {
 		a := &rel.Assets[i]
-		if strings.Contains(a.Name, arch) && strings.HasSuffix(a.Name, ".tar.gz") {
+		if strings.Contains(a.Name, arch) && (strings.HasSuffix(a.Name, ".tar.gz") || strings.HasSuffix(a.Name, ".zip")) {
 			return a, nil
 		}
 	}
@@ -125,18 +127,22 @@ func (pr *progressReader) Read(p []byte) (int, error) {
 // DownloadAndExtract downloads the matching asset from rel and extracts
 // the service's binary to a temp file.  Returns the temp file path —
 // the caller MUST os.Remove it when done.  onProgress receives the
-// download progress (bytes done / total).
+// download progress (bytes done / total).  Both .tar.gz (wireproxy,
+// byedpi) and .zip (nodpi) archives are supported.
 func (s *ServiceDef) DownloadAndExtract(rel *githubRelease, onProgress func(done, total int64)) (string, error) {
 	asset, err := s.MatchAsset(rel)
 	if err != nil {
 		return "", err
 	}
-	tarball, err := downloadAsset(asset, onProgress)
+	archive, err := downloadAsset(asset, onProgress)
 	if err != nil {
 		return "", err
 	}
-	defer os.Remove(tarball)
-	return extractBinary(tarball, s.ArchiveBinaryName())
+	defer os.Remove(archive)
+	if strings.HasSuffix(asset.Name, ".zip") {
+		return extractBinaryFromZip(archive, s.ArchiveBinaryName())
+	}
+	return extractBinary(archive, s.ArchiveBinaryName())
 }
 
 func downloadAsset(asset *githubAsset, onProgress func(done, total int64)) (string, error) {
@@ -148,7 +154,7 @@ func downloadAsset(asset *githubAsset, onProgress func(done, total int64)) (stri
 	if resp.StatusCode != 200 {
 		return "", fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
-	tmp, err := os.CreateTemp("", "proxycontrol-*.tar.gz")
+	tmp, err := os.CreateTemp("", "proxycontrol-download-*")
 	if err != nil {
 		return "", err
 	}
@@ -198,6 +204,44 @@ func extractBinary(tarballPath, namePrefix string) (string, error) {
 				_ = os.Remove(out.Name())
 				return "", err
 			}
+			out.Close()
+			_ = os.Chmod(out.Name(), 0o755)
+			return out.Name(), nil
+		}
+	}
+	return "", fmt.Errorf("бинарный файл %q не найден в архиве", namePrefix)
+}
+
+// extractBinaryFromZip pulls the executable out of a .zip archive into
+// a new temp file and returns its path.  Used for NoDPI, whose release
+// ships as a PyInstaller bundle inside a .zip (with a top-level
+// directory like nodpi_v2.3_linux_x64/nodpi).  namePrefix is matched as
+// a prefix on the base name so "nodpi" matches "nodpi" exactly.
+func extractBinaryFromZip(zipPath, namePrefix string) (string, error) {
+	r, err := zip.OpenReader(zipPath)
+	if err != nil {
+		return "", err
+	}
+	defer r.Close()
+	for _, f := range r.File {
+		base := filepath.Base(f.Name)
+		if strings.HasPrefix(base, namePrefix) && !f.FileInfo().IsDir() {
+			rc, err := f.Open()
+			if err != nil {
+				return "", err
+			}
+			out, err := os.CreateTemp("", "proxycontrol-bin-*")
+			if err != nil {
+				rc.Close()
+				return "", err
+			}
+			if _, err := io.Copy(out, rc); err != nil {
+				rc.Close()
+				out.Close()
+				_ = os.Remove(out.Name())
+				return "", err
+			}
+			rc.Close()
 			out.Close()
 			_ = os.Chmod(out.Name(), 0o755)
 			return out.Name(), nil
