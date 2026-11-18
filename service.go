@@ -544,10 +544,11 @@ func (s *ServiceDef) HasActiveConfig() bool {
 }
 
 // EnsureDefaultConfig writes a default .active_profile for NoDPI if none
-// exists yet.  The default enables automatic blacklist detection, sets
-// a reliable DoH resolver (Cloudflare 1.1.1.1, IP-based so it needs no
-// DNS lookup itself and supports HTTP/1.1), binds to 127.0.0.1 on the
-// configured port, and suppresses UI output.  Only called for nodpi;
+// exists yet.  The default enables automatic blacklist detection, binds
+// to 127.0.0.1 on the configured port, and suppresses UI output.
+// (--doh-server is omitted for now: it is not yet working reliably with
+// nodpi's DoH implementation; nodpi falls back to its built-in
+// Google/Cloudflare resolvers instead.)  Only called for nodpi;
 // wireproxy and byedpi expect the user to supply their own profiles.
 func (s *ServiceDef) EnsureDefaultConfig() {
 	if s.Key != "nodpi" {
@@ -559,13 +560,17 @@ func (s *ServiceDef) EnsureDefaultConfig() {
 	}
 	_ = os.MkdirAll(s.ConfigDir, 0o755)
 	content := fmt.Sprintf(
-		"--autoblacklist\n--doh-server %s\n--host %s\n--port %d\n--quiet\n",
-		defaultNodpiDoHServer, "127.0.0.1", s.Port())
+		"--autoblacklist\n--host %s\n--port %d\n--quiet\n",
+		"127.0.0.1", s.Port())
 	_ = os.WriteFile(s.StateFile, []byte(content), 0o644)
 }
 
-// defaultNodpiDoHServer is the DNS-over-HTTPS resolver used in the
-// default NoDPI profile.  Cloudflare's 1.1.1.1 is IP-based (no DNS
-// bootstrapping needed), supports HTTP/1.1 (required by nodpi), and is
-// fast and globally reachable.
-const defaultNodpiDoHServer = "https://1.1.1.1/dns-query"
+// ProxyType returns "socks5" for WireProxy and ByeDPI (both are SOCKS5
+// proxies) or "http" for NoDPI (an HTTP proxy).  Used by the connection
+// checker to pick the right curl proxy flag and status label.
+func (s *ServiceDef) ProxyType() string {
+	if s.Key == "nodpi" {
+		return "http"
+	}
+	return "socks5"
+}
