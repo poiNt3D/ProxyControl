@@ -562,7 +562,7 @@ func (t *serviceTab) refreshNetwork() {
 			t.network.SetText(fmt.Sprintf("⏸ Сервис остановлен (порт :%d)", port))
 			return
 		}
-		t.network.SetText(CheckNetwork(port))
+		t.network.SetText(CheckNetwork(port, t.svc.ProxyType()))
 	}()
 }
 

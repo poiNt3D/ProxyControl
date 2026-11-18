@@ -13,16 +13,20 @@ import (
 const (
 	defaultWPPort = 8883
 	defaultBDPort = 8882
+	defaultNDPort = 8881
 	// Default binary locations — used when the config does not yet
 	// record a path.  If the file is not actually present there the tab
 	// shows the install buttons instead of the normal controls.
 	defaultWPPath = "/usr/local/bin/wireproxy"
 	defaultBDPath = "/usr/local/bin/byedpi"
+	defaultNDPath = "/usr/local/bin/nodpi"
 	// Default upstream repos.  WireProxy defaults to the AWG fork
 	// (artem-russkikh/wireproxy-awg) which adds AmneziaWG support;
-	// ByeDPI defaults to the official repo.
+	// ByeDPI defaults to the official repo; NoDPI defaults to the
+	// official GVCoder09/NoDPI repo.
 	defaultWPRepo = "artem-russkikh/wireproxy-awg"
 	defaultBDRepo = "hufrea/byedpi"
+	defaultNDRepo = "GVCoder09/NoDPI"
 )
 
 // Config holds the persistent application settings.
@@ -30,10 +34,13 @@ const (
 type Config struct {
 	WPPort       int    `json:"wp_port"`
 	BDPort       int    `json:"bd_port"`
+	NDPort       int    `json:"nd_port"`
 	WPPath       string `json:"wp_path"`       // wireproxy binary path
 	BDPath       string `json:"bd_path"`       // byedpi binary path
+	NDPath       string `json:"nd_path"`       // nodpi binary path
 	WPRepo       string `json:"wp_repo"`       // wireproxy GitHub fork slug
 	BDRepo       string `json:"bd_repo"`       // byedpi GitHub fork slug
+	NDRepo       string `json:"nd_repo"`       // nodpi GitHub fork slug
 	CheckUpdates bool   `json:"check_updates"` // check for binary updates on startup
 }
 
@@ -54,12 +61,13 @@ func lastTabPath() string   { return filepath.Join(configDir(), ".last_tab") }
 // (WP_PORT=… / BD_PORT=…) used by the bash version, so upgrading preserves
 // the user's previously chosen ports.
 func LoadConfig() *Config {
-	cfg := &Config{WPPort: defaultWPPort, BDPort: defaultBDPort}
+	cfg := &Config{WPPort: defaultWPPort, BDPort: defaultBDPort, NDPort: defaultNDPort}
 
 	dir := configDir()
 	_ = os.MkdirAll(dir, 0o755)
 	_ = os.MkdirAll(filepath.Join(dir, "wireproxy"), 0o755)
 	_ = os.MkdirAll(filepath.Join(dir, "byedpi"), 0o755)
+	_ = os.MkdirAll(filepath.Join(dir, "nodpi"), 0o755)
 
 	data, err := os.ReadFile(configPath())
 	if err == nil {
@@ -108,17 +116,26 @@ func (cfg *Config) validate() {
 	if cfg.BDPort < 1 || cfg.BDPort > 65535 {
 		cfg.BDPort = defaultBDPort
 	}
+	if cfg.NDPort < 1 || cfg.NDPort > 65535 {
+		cfg.NDPort = defaultNDPort
+	}
 	if cfg.WPPath == "" {
 		cfg.WPPath = defaultWPPath
 	}
 	if cfg.BDPath == "" {
 		cfg.BDPath = defaultBDPath
 	}
+	if cfg.NDPath == "" {
+		cfg.NDPath = defaultNDPath
+	}
 	if cfg.WPRepo == "" {
 		cfg.WPRepo = defaultWPRepo
 	}
 	if cfg.BDRepo == "" {
 		cfg.BDRepo = defaultBDRepo
+	}
+	if cfg.NDRepo == "" {
+		cfg.NDRepo = defaultNDRepo
 	}
 }
 
@@ -136,7 +153,7 @@ func LoadLastTab() string {
 	data, err := os.ReadFile(lastTabPath())
 	if err == nil {
 		tab := strings.TrimSpace(string(data))
-		if tab == "wireproxy" || tab == "byedpi" {
+		if tab == "wireproxy" || tab == "byedpi" || tab == "nodpi" {
 			return tab
 		}
 	}
@@ -150,17 +167,23 @@ func SaveLastTab(tab string) {
 
 // PortForService returns the configured port for the given service key.
 func (cfg *Config) PortForService(key string) int {
-	if key == "byedpi" {
+	switch key {
+	case "byedpi":
 		return cfg.BDPort
+	case "nodpi":
+		return cfg.NDPort
 	}
 	return cfg.WPPort
 }
 
 // SetPortForService updates the port for the given service key.
 func (cfg *Config) SetPortForService(key string, port int) {
-	if key == "byedpi" {
+	switch key {
+	case "byedpi":
 		cfg.BDPort = port
-	} else {
+	case "nodpi":
+		cfg.NDPort = port
+	default:
 		cfg.WPPort = port
 	}
 }
@@ -168,17 +191,23 @@ func (cfg *Config) SetPortForService(key string, port int) {
 // PathForService returns the configured binary path for the given
 // service key.  Never empty — validate() fills in the default.
 func (cfg *Config) PathForService(key string) string {
-	if key == "byedpi" {
+	switch key {
+	case "byedpi":
 		return cfg.BDPath
+	case "nodpi":
+		return cfg.NDPath
 	}
 	return cfg.WPPath
 }
 
 // SetPathForService updates the binary path for the given service key.
 func (cfg *Config) SetPathForService(key, path string) {
-	if key == "byedpi" {
+	switch key {
+	case "byedpi":
 		cfg.BDPath = path
-	} else {
+	case "nodpi":
+		cfg.NDPath = path
+	default:
 		cfg.WPPath = path
 	}
 }
@@ -187,22 +216,28 @@ func (cfg *Config) SetPathForService(key, path string) {
 // for the given service key.  Never empty — validate() fills in the
 // default.
 func (cfg *Config) RepoForService(key string) string {
-	if key == "byedpi" {
+	switch key {
+	case "byedpi":
 		return cfg.BDRepo
+	case "nodpi":
+		return cfg.NDRepo
 	}
 	return cfg.WPRepo
 }
 
 // SetRepoForService updates the GitHub fork slug for the given service.
 func (cfg *Config) SetRepoForService(key, slug string) {
-	if key == "byedpi" {
+	switch key {
+	case "byedpi":
 		cfg.BDRepo = slug
-	} else {
+	case "nodpi":
+		cfg.NDRepo = slug
+	default:
 		cfg.WPRepo = slug
 	}
 }
 
 // String returns a human-readable summary (for debugging).
 func (cfg *Config) String() string {
-	return fmt.Sprintf("WP:%d BD:%d", cfg.WPPort, cfg.BDPort)
+	return fmt.Sprintf("WP:%d BD:%d ND:%d", cfg.WPPort, cfg.BDPort, cfg.NDPort)
 }

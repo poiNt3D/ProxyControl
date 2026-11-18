@@ -64,6 +64,20 @@ func NewService(key string, cfg *Config) *ServiceDef {
 			HasProfiles: true,
 			cfg:         cfg,
 		}
+	case "nodpi":
+		return &ServiceDef{
+			Key:         "nodpi",
+			Label:       "NoDPI",
+			UnitName:    "nodpi.service",
+			ConfigDir:   filepath.Join(base, "nodpi"),
+			LogFile:     filepath.Join(base, "nodpi", "nodpi.log"),
+			ActiveConf:  filepath.Join(base, "nodpi", "nodpi.txt"),
+			ConfExt:     "txt",
+			StateFile:   filepath.Join(base, "nodpi", ".active_profile"),
+			ExcludeName: "", // all *.txt/*.conf files are profiles
+			HasProfiles: true,
+			cfg:         cfg,
+		}
 	}
 	return nil
 }
@@ -75,11 +89,15 @@ func (s *ServiceDef) Port() int { return s.cfg.PortForService(s.Key) }
 // executable (read from the config file).
 func (s *ServiceDef) BinaryPath() string { return s.cfg.PathForService(s.Key) }
 
-// BinaryName returns just the executable file name ("wireproxy" or
-// "byedpi") — used as the file to extract from the downloaded archive.
+// BinaryName returns just the executable file name ("wireproxy", "byedpi"
+// or "nodpi") — used as the installed file name and as the file to
+// extract from the downloaded archive.
 func (s *ServiceDef) BinaryName() string {
-	if s.Key == "byedpi" {
+	switch s.Key {
+	case "byedpi":
 		return "byedpi"
+	case "nodpi":
+		return "nodpi"
 	}
 	return "wireproxy"
 }
@@ -104,12 +122,16 @@ func (s *ServiceDef) RepoSlug() string {
 }
 
 // ArchiveBinaryName returns the name prefix of the executable inside
-// the downloaded .tar.gz.  WireProxy archives contain a file named
+// the downloaded archive.  WireProxy archives contain a file named
 // "wireproxy"; ByeDPI archives contain "ciadpi-<arch>" (the project's
-// C binary is called ciadpi, even though the service key is "byedpi").
+// C binary is called ciadpi, even though the service key is "byedpi");
+// NoDPI archives contain "nodpi" (inside a top-level directory).
 func (s *ServiceDef) ArchiveBinaryName() string {
-	if s.Key == "byedpi" {
+	switch s.Key {
+	case "byedpi":
 		return "ciadpi"
+	case "nodpi":
+		return "nodpi"
 	}
 	return "wireproxy"
 }
@@ -129,16 +151,28 @@ func (s *ServiceDef) AssetArch() string {
 			return "linux_amd64"
 		}
 	}
-	// byedpi
+	if s.Key == "byedpi" {
+		switch runtime.GOARCH {
+		case "arm64":
+			return "aarch64"
+		case "arm":
+			return "armv7l"
+		case "386":
+			return "i686"
+		default:
+			return "x86_64"
+		}
+	}
+	// nodpi: asset names use "linux_x64" / "linux_arm64" etc.
 	switch runtime.GOARCH {
 	case "arm64":
-		return "aarch64"
+		return "linux_arm64"
 	case "arm":
-		return "armv7l"
+		return "linux_arm"
 	case "386":
-		return "i686"
+		return "linux_386"
 	default:
-		return "x86_64"
+		return "linux_x64"
 	}
 }
 
@@ -255,12 +289,47 @@ func (s *ServiceDef) ApplyPort(port int) error {
 		// Write the .port file consumed by the systemd unit.
 		_ = os.MkdirAll(s.ConfigDir, 0o755)
 		_ = os.WriteFile(s.PortFile, []byte(strconv.Itoa(port)), 0o644)
+	case "nodpi":
+		// The port lives inside .active_profile as "--port N".
+		// Update it in place so the running unit picks up the new
+		// value on restart.
+		s.updateNodpiPortInProfile(port)
 	}
 
 	if s.IsActive() {
 		return s.Restart()
 	}
 	return nil
+}
+
+// updateNodpiPortInProfile rewrites the "--port N" argument inside
+// .active_profile to the new port.  If --port is not yet present (e.g.
+// the user wrote a custom profile without it), the flag is appended.
+func (s *ServiceDef) updateNodpiPortInProfile(port int) {
+	data, err := os.ReadFile(s.StateFile)
+	if err != nil {
+		return // no .active_profile yet — nothing to update
+	}
+	content := string(data)
+	newArg := "--port " + strconv.Itoa(port)
+	// Match --port followed by whitespace and a number.
+	idx := strings.Index(content, "--port")
+	if idx >= 0 {
+		// Skip the flag + whitespace, then find the end of the number.
+		afterFlag := idx + len("--port")
+		for afterFlag < len(content) && (content[afterFlag] == ' ' || content[afterFlag] == '\t') {
+			afterFlag++
+		}
+		numEnd := afterFlag
+		for numEnd < len(content) && content[numEnd] >= '0' && content[numEnd] <= '9' {
+			numEnd++
+		}
+		content = content[:idx] + newArg + content[numEnd:]
+	} else {
+		// --port not found — append it.
+		content = strings.TrimRight(content, "\n") + "\n" + newArg
+	}
+	_ = os.WriteFile(s.StateFile, []byte(content), 0o644)
 }
 
 // updateWPBindAddress rewrites the BindAddress line in wireproxy.template
@@ -303,11 +372,11 @@ func (s *ServiceDef) OpenConfigDir() {
 // --- profile / config selection -------------------------------------------
 
 // configExts returns the file extensions that are recognised as profile
-// files for this service.  ByeDPI accepts both .txt (the bash-version
-// convention) and .conf (what users typically create); WireProxy uses
-// only .conf.
+// files for this service.  ByeDPI and NoDPI accept both .txt (the
+// bash-version convention) and .conf (what users typically create);
+// WireProxy uses only .conf.
 func (s *ServiceDef) configExts() []string {
-	if s.Key == "byedpi" {
+	if s.Key == "byedpi" || s.Key == "nodpi" {
 		return []string{"txt", "conf"}
 	}
 	return []string{"conf"}
@@ -439,6 +508,18 @@ func (s *ServiceDef) ApplyProfile(name string) error {
 		if err := os.WriteFile(s.StateFile, profileData, 0o644); err != nil {
 			return err
 		}
+
+	case "nodpi":
+		// Same as byedpi: profile content → .active_profile (the full
+		// command-line args, consumed by the systemd unit).
+		if err := os.WriteFile(s.StateFile, profileData, 0o644); err != nil {
+			return err
+		}
+		// If the profile does not carry an explicit --port, inject the
+		// currently configured port so the unit always binds correctly.
+		if !strings.Contains(string(profileData), "--port") {
+			s.updateNodpiPortInProfile(s.Port())
+		}
 	}
 
 	if s.IsActive() {
@@ -455,9 +536,41 @@ func (s *ServiceDef) HasActiveConfig() bool {
 	case "wireproxy":
 		info, err := os.Stat(s.ActiveConf)
 		return err == nil && !info.IsDir() && info.Size() > 0
-	case "byedpi":
+	case "byedpi", "nodpi":
 		data, err := os.ReadFile(s.StateFile)
 		return err == nil && len(strings.TrimSpace(string(data))) > 0
 	}
 	return true
+}
+
+// EnsureDefaultConfig writes a default .active_profile for NoDPI if none
+// exists yet.  The default enables automatic blacklist detection, binds
+// to 127.0.0.1 on the configured port, and suppresses UI output.
+// (--doh-server is omitted for now: it is not yet working reliably with
+// nodpi's DoH implementation; nodpi falls back to its built-in
+// Google/Cloudflare resolvers instead.)  Only called for nodpi;
+// wireproxy and byedpi expect the user to supply their own profiles.
+func (s *ServiceDef) EnsureDefaultConfig() {
+	if s.Key != "nodpi" {
+		return
+	}
+	// Already have a profile — leave it alone.
+	if s.HasActiveConfig() {
+		return
+	}
+	_ = os.MkdirAll(s.ConfigDir, 0o755)
+	content := fmt.Sprintf(
+		"--autoblacklist\n--host %s\n--port %d\n--quiet\n",
+		"127.0.0.1", s.Port())
+	_ = os.WriteFile(s.StateFile, []byte(content), 0o644)
+}
+
+// ProxyType returns "socks5" for WireProxy and ByeDPI (both are SOCKS5
+// proxies) or "http" for NoDPI (an HTTP proxy).  Used by the connection
+// checker to pick the right curl proxy flag and status label.
+func (s *ServiceDef) ProxyType() string {
+	if s.Key == "nodpi" {
+		return "http"
+	}
+	return "socks5"
 }
