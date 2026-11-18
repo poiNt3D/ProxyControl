@@ -1,9 +1,11 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -68,6 +70,123 @@ func NewService(key string, cfg *Config) *ServiceDef {
 
 // Port returns the currently configured port for this service.
 func (s *ServiceDef) Port() int { return s.cfg.PortForService(s.Key) }
+
+// BinaryPath returns the configured on-disk path of the service's
+// executable (read from the config file).
+func (s *ServiceDef) BinaryPath() string { return s.cfg.PathForService(s.Key) }
+
+// BinaryName returns just the executable file name ("wireproxy" or
+// "byedpi") — used as the file to extract from the downloaded archive.
+func (s *ServiceDef) BinaryName() string {
+	if s.Key == "byedpi" {
+		return "byedpi"
+	}
+	return "wireproxy"
+}
+
+// BinaryExists reports whether the configured binary is present and is
+// a regular file (not a directory).  When this is false the tab shows
+// the install buttons instead of the normal controls.
+func (s *ServiceDef) BinaryExists() bool {
+	p := s.BinaryPath()
+	if p == "" {
+		return false
+	}
+	info, err := os.Stat(p)
+	return err == nil && !info.IsDir()
+}
+
+// RepoSlug returns the GitHub "owner/repo" slug for the service's
+// upstream project, read from the config so the user can point at a
+// fork.  Defaults are set in config.validate().
+func (s *ServiceDef) RepoSlug() string {
+	return s.cfg.RepoForService(s.Key)
+}
+
+// ArchiveBinaryName returns the name prefix of the executable inside
+// the downloaded .tar.gz.  WireProxy archives contain a file named
+// "wireproxy"; ByeDPI archives contain "ciadpi-<arch>" (the project's
+// C binary is called ciadpi, even though the service key is "byedpi").
+func (s *ServiceDef) ArchiveBinaryName() string {
+	if s.Key == "byedpi" {
+		return "ciadpi"
+	}
+	return "wireproxy"
+}
+
+// AssetArch returns the architecture keyword used inside the release
+// asset file name for the running platform.
+func (s *ServiceDef) AssetArch() string {
+	if s.Key == "wireproxy" {
+		switch runtime.GOARCH {
+		case "arm64":
+			return "linux_arm64"
+		case "arm":
+			return "linux_arm"
+		case "386":
+			return "linux_386"
+		default:
+			return "linux_amd64"
+		}
+	}
+	// byedpi
+	switch runtime.GOARCH {
+	case "arm64":
+		return "aarch64"
+	case "arm":
+		return "armv7l"
+	case "386":
+		return "i686"
+	default:
+		return "x86_64"
+	}
+}
+
+// SetBinaryPath persists a new binary path to the config and saves it.
+func (s *ServiceDef) SetBinaryPath(path string) {
+	s.cfg.SetPathForService(s.Key, path)
+	_ = s.cfg.Save()
+}
+
+// InstalledVersion runs the binary with --version (falling back to -v)
+// and extracts the version string from the output.  Returns "" with an
+// error if the binary is missing or does not report a version.
+func (s *ServiceDef) InstalledVersion() (string, error) {
+	if !s.BinaryExists() {
+		return "", fmt.Errorf("binary not found at %s", s.BinaryPath())
+	}
+	out, err := exec.Command(s.BinaryPath(), "--version").CombinedOutput()
+	if err != nil {
+		// byedpi/ciadpi uses -v, not --version
+		out, err = exec.Command(s.BinaryPath(), "-v").CombinedOutput()
+		if err != nil {
+			return "", fmt.Errorf("cannot get version: %w", err)
+		}
+	}
+	v := extractVersionString(string(out))
+	if v == "" {
+		return "", fmt.Errorf("no version in output: %q", string(out))
+	}
+	return v, nil
+}
+
+// CheckForUpdate compares the installed binary's version with the latest
+// GitHub release tag.  Returns the current version, the latest tag, and
+// whether an update is available.  The comparison normalises leading
+// zeros (e.g. tag "v0.17.3" vs binary "17.3" → equal, no update).
+func (s *ServiceDef) CheckForUpdate() (current, latest string, available bool, err error) {
+	current, err = s.InstalledVersion()
+	if err != nil {
+		return
+	}
+	rel, err := s.FetchLatestRelease()
+	if err != nil {
+		return
+	}
+	latest = rel.TagName
+	available = normalizeVersion(current) != normalizeVersion(latest)
+	return
+}
 
 // --- systemd (user) wrappers ----------------------------------------------
 
@@ -183,29 +302,60 @@ func (s *ServiceDef) OpenConfigDir() {
 
 // --- profile / config selection -------------------------------------------
 
+// configExts returns the file extensions that are recognised as profile
+// files for this service.  ByeDPI accepts both .txt (the bash-version
+// convention) and .conf (what users typically create); WireProxy uses
+// only .conf.
+func (s *ServiceDef) configExts() []string {
+	if s.Key == "byedpi" {
+		return []string{"txt", "conf"}
+	}
+	return []string{"conf"}
+}
+
+// stripConfigExt returns the profile name (file name with extension
+// removed) and the matched extension, if the file has one of the valid
+// config extensions.  Returns ("", "", false) otherwise.
+func stripConfigExt(name string, exts []string) (profile, ext string, ok bool) {
+	for _, e := range exts {
+		suffix := "." + e
+		if strings.HasSuffix(name, suffix) {
+			return strings.TrimSuffix(name, suffix), e, true
+		}
+	}
+	return "", "", false
+}
+
 // Profiles returns the sorted list of available config profile names.
-// A profile is any file *.<ConfExt> in the service directory, minus the
-// extension.  The active config name (ExcludeName) is filtered out so
-// that e.g. wireproxy.conf does not appear as a selectable profile.
+// A profile is any file with a recognised extension in the service
+// directory, minus the extension.  The active config name (ExcludeName)
+// is filtered out so that e.g. wireproxy.conf does not appear as a
+// selectable profile.  If two files share the same base name with
+// different extensions (foo.txt and foo.conf), only the first match is
+// kept.
 func (s *ServiceDef) Profiles() []string {
 	entries, err := os.ReadDir(s.ConfigDir)
 	if err != nil {
 		return nil
 	}
-	ext := "." + s.ConfExt
+	exts := s.configExts()
+	seen := map[string]bool{}
 	var names []string
 	for _, e := range entries {
 		if e.IsDir() {
 			continue
 		}
-		name := e.Name()
-		if !strings.HasSuffix(name, ext) {
+		profileName, _, ok := stripConfigExt(e.Name(), exts)
+		if !ok {
 			continue
 		}
-		profileName := strings.TrimSuffix(name, ext)
 		if profileName == s.ExcludeName {
 			continue
 		}
+		if seen[profileName] {
+			continue
+		}
+		seen[profileName] = true
 		names = append(names, profileName)
 	}
 	sort.Strings(names)
@@ -232,11 +382,14 @@ func (s *ServiceDef) ActiveProfileName() string {
 		return content
 	}
 
-	// byedpi: match content against profile files
+	// byedpi: match content against profile files (any valid extension)
+	exts := s.configExts()
 	for _, profile := range s.Profiles() {
-		pdata, err := os.ReadFile(filepath.Join(s.ConfigDir, profile+"."+s.ConfExt))
-		if err == nil && strings.TrimSpace(string(pdata)) == content {
-			return profile
+		for _, ext := range exts {
+			pdata, err := os.ReadFile(filepath.Join(s.ConfigDir, profile+"."+ext))
+			if err == nil && strings.TrimSpace(string(pdata)) == content {
+				return profile
+			}
 		}
 	}
 	return ""
@@ -246,10 +399,19 @@ func (s *ServiceDef) ActiveProfileName() string {
 // the service if it is currently running.  Mirrors the bash WP_apply_config
 // and BD_apply_config functions.
 func (s *ServiceDef) ApplyProfile(name string) error {
-	profilePath := filepath.Join(s.ConfigDir, name+"."+s.ConfExt)
-	profileData, err := os.ReadFile(profilePath)
-	if err != nil {
-		return err
+	// Find the profile file — try each valid extension until one exists.
+	var profilePath string
+	var profileData []byte
+	for _, ext := range s.configExts() {
+		p := filepath.Join(s.ConfigDir, name+"."+ext)
+		if data, err := os.ReadFile(p); err == nil {
+			profilePath = p
+			profileData = data
+			break
+		}
+	}
+	if profilePath == "" {
+		return fmt.Errorf("профиль %q не найден в %s", name, s.ConfigDir)
 	}
 
 	_ = os.MkdirAll(s.ConfigDir, 0o755)

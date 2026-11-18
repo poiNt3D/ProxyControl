@@ -1,11 +1,15 @@
 package main
 
 import (
+	"fmt"
+	"os"
 	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/dialog"
+	"fyne.io/fyne/v2/widget"
 )
 
 // ProxyApp holds the top-level application state shared across tabs.
@@ -19,7 +23,21 @@ type ProxyApp struct {
 }
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "--test-install" {
+		testInstaller()
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "--test-profiles" {
+		testProfiles()
+		return
+	}
+
 	cfg := LoadConfig()
+
+	// Make sure the systemd user units exist (wireproxy, byedpi, and the
+	// resume monitor).  Creates any that are missing, daemon-reloads, and
+	// enables+starts the resume monitor.  Idempotent — safe every launch.
+	EnsureSystemdUnits(cfg)
 
 	a := app.New()
 	a.SetIcon(nil) // TODO: bundle an icon
@@ -33,8 +51,8 @@ func main() {
 	wpSvc := NewService("wireproxy", cfg)
 	bdSvc := NewService("byedpi", cfg)
 
-	pa.wpTab = newServiceTab(wpSvc, cfg, w, pa.showSettings, pa.toggleLog)
-	pa.bdTab = newServiceTab(bdSvc, cfg, w, pa.showSettings, pa.toggleLog)
+	pa.wpTab = newServiceTab(wpSvc, cfg, w, pa.showSettings, pa.toggleLog, pa.rebuildTab)
+	pa.bdTab = newServiceTab(bdSvc, cfg, w, pa.showSettings, pa.toggleLog, pa.rebuildTab)
 
 	pa.tabs = container.NewAppTabs(
 		container.NewTabItem("WireProxy", pa.wpTab.Content()),
@@ -60,6 +78,20 @@ func main() {
 	w.SetContent(pa.tabs)
 	w.SetOnClosed(func() { a.Quit() })
 
+	// Check for binary updates on startup if the user opted in.
+	go pa.checkUpdatesOnStartup()
+
+	// --show-settings: open the settings dialog 1s after launch (for
+	// screenshots / automated testing).
+	if len(os.Args) > 1 && os.Args[1] == "--show-settings" {
+		time.AfterFunc(1*time.Second, func() {
+			w.Resize(fyne.NewSize(560, 520))
+			time.AfterFunc(300*time.Millisecond, func() {
+				pa.showSettings()
+			})
+		})
+	}
+
 	w.ShowAndRun()
 }
 
@@ -70,6 +102,89 @@ func (pa *ProxyApp) showSettings() {
 		pa.wpTab.refreshAll()
 		pa.bdTab.refreshAll()
 	})
+}
+
+// rebuildTab is called by a service tab after it swaps its content
+// (e.g. after installing a binary and switching from install mode to
+// normal mode).  It refreshes the AppTabs items so the new content is
+// displayed.
+func (pa *ProxyApp) rebuildTab() {
+	pa.tabs.Items[0].Content = pa.wpTab.Content()
+	pa.tabs.Items[1].Content = pa.bdTab.Content()
+	pa.tabs.Refresh()
+	pa.win.Content().Refresh()
+}
+
+// --- startup binary update check ------------------------------------------
+
+// updateInfo holds the result of comparing one service's installed
+// binary version with the latest GitHub release.
+type updateInfo struct {
+	tab     *serviceTab
+	current string
+	latest  string
+}
+
+// checkUpdatesOnStartup runs in a goroutine after the window opens.  If
+// the user opted in (cfg.CheckUpdates), it checks each installed binary
+// against the latest release from its configured fork and shows a dialog
+// listing any that are out of date.
+func (pa *ProxyApp) checkUpdatesOnStartup() {
+	if !pa.cfg.CheckUpdates {
+		return
+	}
+	// Let the window finish rendering before the network calls start.
+	time.Sleep(2 * time.Second)
+
+	var updates []updateInfo
+	for _, tab := range []*serviceTab{pa.wpTab, pa.bdTab} {
+		if !tab.svc.BinaryExists() {
+			continue
+		}
+		current, latest, available, err := tab.svc.CheckForUpdate()
+		if err != nil || !available {
+			continue
+		}
+		updates = append(updates, updateInfo{tab: tab, current: current, latest: latest})
+	}
+	if len(updates) > 0 {
+		pa.showUpdateDialog(updates)
+	}
+}
+
+// showUpdateDialog presents a modal listing each service that has a
+// newer release available.  Each row has a "Скачать" button that
+// triggers the update flow (download + install over the existing
+// binary) and dismisses the dialog.
+func (pa *ProxyApp) showUpdateDialog(updates []updateInfo) {
+	title := widget.NewLabel("Доступны обновления бинарных файлов:")
+	title.TextStyle = fyne.TextStyle{Bold: true}
+
+	// Declare dlg up front so the button closures can capture it.
+	var dlg *dialog.CustomDialog
+
+	var rows []fyne.CanvasObject
+	rows = append(rows, title)
+	for _, u := range updates {
+		info := widget.NewLabel(fmt.Sprintf("%s:  %s → %s",
+			u.tab.svc.Label, u.current, u.latest))
+
+		// Capture u for the closure.
+		uu := u
+		dlBtn := widget.NewButton("Скачать", func() {
+			dlg.Hide()
+			uu.tab.onUpdateBinary()
+		})
+		rows = append(rows, container.NewHBox(info, dlBtn))
+	}
+
+	closeBtn := widget.NewButton("Закрыть", func() { dlg.Hide() })
+	rows = append(rows, closeBtn)
+
+	content := container.NewVBox(rows...)
+
+	dlg = dialog.NewCustomWithoutButtons("Обновления", content, pa.win)
+	dlg.Show()
 }
 
 // toggleLog collapses or expands the log panel on both tabs and resizes
@@ -123,5 +238,86 @@ func (pa *ProxyApp) toggleLog() {
 		})
 	} else {
 		pa.win.Resize(fyne.NewSize(w, logExpandedHeight))
+	}
+}
+
+// testInstaller exercises the GitHub download + extract + install flow
+// without starting the GUI.  Triggered by `proxycontrol --test-install`.
+// It tests both wireproxy (artem-russkikh/wireproxy-awg fork) and byedpi
+// (hufrea/byedpi, whose archive contains ciadpi-<arch> not byedpi), plus
+// the version-comparison update check.
+func testInstaller() {
+	cfg := LoadConfig()
+
+	for _, key := range []string{"wireproxy", "byedpi"} {
+		fmt.Printf("\n========== %s ==========\n", key)
+		svc := NewService(key, cfg)
+		fmt.Println("repo:", svc.RepoSlug(), "archive binary:", svc.ArchiveBinaryName())
+
+		rel, err := svc.FetchLatestRelease()
+		if err != nil {
+			fmt.Println("FAIL FetchLatestRelease:", err)
+			continue
+		}
+		fmt.Println("latest tag:", rel.TagName)
+
+		tmp, err := svc.DownloadAndExtract(rel, func(done, total int64) {
+			if total > 0 && done%100000 == 0 {
+				fmt.Printf("  progress: %d/%d (%.0f%%)\n", done, total, float64(done)/float64(total)*100)
+			}
+		})
+		if err != nil {
+			fmt.Println("FAIL DownloadAndExtract:", err)
+			continue
+		}
+		fmt.Println("extracted:", tmp)
+		if info, e := os.Stat(tmp); e == nil {
+			fmt.Println("  size:", info.Size(), "executable:", info.Mode()&0o111 != 0)
+		}
+
+		destPath := UserBinDir() + "/" + svc.BinaryName()
+		os.Remove(destPath)
+		if err := InstallBinary(tmp, destPath, false); err != nil {
+			fmt.Println("FAIL InstallBinary:", err)
+			os.Remove(tmp)
+			continue
+		}
+		os.Remove(tmp)
+		fmt.Println("installed to:", destPath)
+
+		// Point the config at the installed binary so version checks work.
+		svc.SetBinaryPath(destPath)
+
+		// Version check.
+		v, err := svc.InstalledVersion()
+		if err != nil {
+			fmt.Println("FAIL InstalledVersion:", err)
+		} else {
+			fmt.Println("installed version:", v)
+		}
+		current, latest, available, err := svc.CheckForUpdate()
+		if err != nil {
+			fmt.Println("FAIL CheckForUpdate:", err)
+		} else {
+			fmt.Printf("CheckForUpdate: current=%s latest=%s updateAvailable=%v\n",
+				current, latest, available)
+		}
+
+		os.Remove(destPath)
+	}
+
+	fmt.Println("\nDONE")
+}
+
+// testProfiles prints the config profiles found for each service, to
+// verify that .conf files are now listed for byedpi (not just .txt).
+// Triggered by `proxycontrol --test-profiles`.
+func testProfiles() {
+	cfg := LoadConfig()
+	for _, key := range []string{"wireproxy", "byedpi"} {
+		svc := NewService(key, cfg)
+		exts := svc.configExts()
+		profiles := svc.Profiles()
+		fmt.Printf("%s: exts=%v profiles=%v\n", svc.Label, exts, profiles)
 	}
 }
