@@ -11,17 +11,30 @@ import (
 	"fyne.io/fyne/v2/widget"
 )
 
-// showSettingsDialog opens a modal form with autostart checkboxes, port
-// entries, fork-slug fields, an update-check toggle, and "open folder"
-// buttons for each service.  When the user clicks "Применить" the changes
-// are persisted and applied to systemd.
+// showSettingsDialog opens a modal form with a language selector,
+// autostart checkboxes, port entries, fork-slug fields, an update-check
+// toggle, and "open folder" buttons for each service.  When the user
+// clicks Apply the changes are persisted and applied to systemd; if the
+// language changed, a restart notice is shown.
 func showSettingsDialog(win fyne.Window, cfg *Config, onApplied func()) {
 	wpSvc := NewService("wireproxy", cfg)
 	bdSvc := NewService("byedpi", cfg)
 	ndSvc := NewService("nodpi", cfg)
 
+	// --- Language selector ---
+	langs := ListAvailableLangs(LangDir())
+	langNames := make([]string, len(langs))
+	for i, l := range langs {
+		langNames[i] = l.Name
+	}
+	langSelect := widget.NewSelect(langNames, nil)
+	langSelect.SetSelected(LangCodeToName(langs, cfg.Language))
+	if langSelect.Selected == "" && len(langNames) > 0 {
+		langSelect.SetSelected(langNames[0])
+	}
+
 	// --- WireProxy controls ---
-	wpAutoCheck := widget.NewCheck("включить автозапуск", nil)
+	wpAutoCheck := widget.NewCheck(T("settings.autostart_check"), nil)
 	wpAutoCheck.SetChecked(wpSvc.IsEnabled())
 
 	wpPortEntry := widget.NewEntry()
@@ -32,12 +45,12 @@ func showSettingsDialog(win fyne.Window, cfg *Config, onApplied func()) {
 	wpRepoEntry.SetText(cfg.WPRepo)
 	wpRepoEntry.PlaceHolder = "owner/repo"
 
-	wpFolderBtn := widget.NewButton("Открыть", func() {
+	wpFolderBtn := widget.NewButton(T("btn.open"), func() {
 		wpSvc.OpenConfigDir()
 	})
 
 	// --- ByeDPI controls ---
-	bdAutoCheck := widget.NewCheck("включить автозапуск", nil)
+	bdAutoCheck := widget.NewCheck(T("settings.autostart_check"), nil)
 	bdAutoCheck.SetChecked(bdSvc.IsEnabled())
 
 	bdPortEntry := widget.NewEntry()
@@ -48,12 +61,12 @@ func showSettingsDialog(win fyne.Window, cfg *Config, onApplied func()) {
 	bdRepoEntry.SetText(cfg.BDRepo)
 	bdRepoEntry.PlaceHolder = "owner/repo"
 
-	bdFolderBtn := widget.NewButton("Открыть", func() {
+	bdFolderBtn := widget.NewButton(T("btn.open"), func() {
 		bdSvc.OpenConfigDir()
 	})
 
 	// --- NoDPI controls ---
-	ndAutoCheck := widget.NewCheck("включить автозапуск", nil)
+	ndAutoCheck := widget.NewCheck(T("settings.autostart_check"), nil)
 	ndAutoCheck.SetChecked(ndSvc.IsEnabled())
 
 	ndPortEntry := widget.NewEntry()
@@ -64,32 +77,33 @@ func showSettingsDialog(win fyne.Window, cfg *Config, onApplied func()) {
 	ndRepoEntry.SetText(cfg.NDRepo)
 	ndRepoEntry.PlaceHolder = "owner/repo"
 
-	ndFolderBtn := widget.NewButton("Открыть", func() {
+	ndFolderBtn := widget.NewButton(T("btn.open"), func() {
 		ndSvc.OpenConfigDir()
 	})
 
 	// --- Update check ---
-	checkUpdatesCheck := widget.NewCheck("проверять обновления бинарных файлов при запуске", nil)
+	checkUpdatesCheck := widget.NewCheck(T("settings.check_updates"), nil)
 	checkUpdatesCheck.SetChecked(cfg.CheckUpdates)
 
 	items := []*widget.FormItem{
-		{Text: "Автозапуск WireProxy", Widget: wpAutoCheck},
-		{Text: "Порт WireProxy (SOCKS5)", Widget: wpPortEntry},
-		{Text: "Форк WireProxy (GitHub)", Widget: wpRepoEntry},
-		{Text: "Папка WireProxy", Widget: wpFolderBtn},
-		{Text: "Автозапуск ByeDPI", Widget: bdAutoCheck},
-		{Text: "Порт ByeDPI (SOCKS5)", Widget: bdPortEntry},
-		{Text: "Форк ByeDPI (GitHub)", Widget: bdRepoEntry},
-		{Text: "Папка ByeDPI", Widget: bdFolderBtn},
-		{Text: "Автозапуск NoDPI", Widget: ndAutoCheck},
-		{Text: "Порт NoDPI (HTTP)", Widget: ndPortEntry},
-		{Text: "Форк NoDPI (GitHub)", Widget: ndRepoEntry},
-		{Text: "Папка NoDPI", Widget: ndFolderBtn},
-		{Text: "Обновления", Widget: checkUpdatesCheck},
+		{Text: T("settings.language"), Widget: langSelect},
+		{Text: T("settings.autostart_wp"), Widget: wpAutoCheck},
+		{Text: T("settings.port_wp"), Widget: wpPortEntry},
+		{Text: T("settings.fork_wp"), Widget: wpRepoEntry},
+		{Text: T("settings.folder_wp"), Widget: wpFolderBtn},
+		{Text: T("settings.autostart_bd"), Widget: bdAutoCheck},
+		{Text: T("settings.port_bd"), Widget: bdPortEntry},
+		{Text: T("settings.fork_bd"), Widget: bdRepoEntry},
+		{Text: T("settings.folder_bd"), Widget: bdFolderBtn},
+		{Text: T("settings.autostart_nd"), Widget: ndAutoCheck},
+		{Text: T("settings.port_nd"), Widget: ndPortEntry},
+		{Text: T("settings.fork_nd"), Widget: ndRepoEntry},
+		{Text: T("settings.folder_nd"), Widget: ndFolderBtn},
+		{Text: T("settings.updates"), Widget: checkUpdatesCheck},
 	}
 
 	// Build a scrollable list of labelled rows.  dialog.NewForm does not
-	// scroll its content, so with 13 items the bottom rows are clipped
+	// scroll its content, so with 14 items the bottom rows are clipped
 	// by the action buttons on smaller screens.
 	var rows []fyne.CanvasObject
 	for _, item := range items {
@@ -101,35 +115,45 @@ func showSettingsDialog(win fyne.Window, cfg *Config, onApplied func()) {
 	// Declare dlg up front so the button closures can hide it.
 	var dlg *dialog.CustomDialog
 
-	applyBtn := widget.NewButton("Применить", func() {
+	applyBtn := widget.NewButton(T("btn.apply"), func() {
 		dlg.Hide()
+		newLang := LangNameToCode(langs, langSelect.Selected)
+		langChanged := newLang != "" && newLang != cfg.Language
 		applySettings(cfg, wpSvc, bdSvc, ndSvc,
 			wpAutoCheck.Checked, wpPortEntry.Text, wpRepoEntry.Text,
 			bdAutoCheck.Checked, bdPortEntry.Text, bdRepoEntry.Text,
 			ndAutoCheck.Checked, ndPortEntry.Text, ndRepoEntry.Text,
-			checkUpdatesCheck.Checked)
+			checkUpdatesCheck.Checked, newLang)
 		onApplied()
+		if langChanged {
+			dialog.ShowInformation(T("settings.restart"), T("settings.lang_changed"), win)
+		}
 	})
-	cancelBtn := widget.NewButton("Отмена", func() {
+	cancelBtn := widget.NewButton(T("btn.cancel"), func() {
 		dlg.Hide()
 	})
 
 	bottomBar := container.NewHBox(cancelBtn, applyBtn)
 	dialogContent := container.NewBorder(nil, bottomBar, nil, nil, scroll)
 
-	dlg = dialog.NewCustomWithoutButtons("Настройки ProxyControl", dialogContent, win)
+	dlg = dialog.NewCustomWithoutButtons(T("settings.title"), dialogContent, win)
 	dlg.Resize(fyne.NewSize(560, 520))
 	dlg.Show()
 }
 
-// applySettings persists port, fork and update-check changes, applies
-// port changes to the service config files (restarting if active), and
-// enables/disables autostart.
+// applySettings persists language, port, fork and update-check changes,
+// applies port changes to the service config files (restarting if
+// active), and enables/disables autostart.
 func applySettings(cfg *Config, wpSvc, bdSvc, ndSvc *ServiceDef,
 	wpAuto bool, wpPortStr, wpRepo string,
 	bdAuto bool, bdPortStr, bdRepo string,
 	ndAuto bool, ndPortStr, ndRepo string,
-	checkUpdates bool) {
+	checkUpdates bool, language string) {
+
+	// Language
+	if language != "" {
+		cfg.Language = language
+	}
 
 	// WireProxy port
 	if wpPort, err := strconv.Atoi(wpPortStr); err == nil && wpPort >= 1 && wpPort <= 65535 {
@@ -183,10 +207,10 @@ func applySettings(cfg *Config, wpSvc, bdSvc, ndSvc *ServiceDef,
 func portValidator(s string) error {
 	port, err := strconv.Atoi(s)
 	if err != nil {
-		return fmt.Errorf("должно быть число")
+		return fmt.Errorf(T("settings.port_not_number"))
 	}
 	if port < 1 || port > 65535 {
-		return fmt.Errorf("порт должен быть 1–65535")
+		return fmt.Errorf(T("settings.port_range"))
 	}
 	return nil
 }

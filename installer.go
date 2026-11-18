@@ -79,7 +79,7 @@ func (s *ServiceDef) FetchLatestRelease() (*githubRelease, error) {
 			return &rel, nil
 		}
 	}
-	return nil, fmt.Errorf("не удалось получить информацию о релизе %s", s.RepoSlug())
+	return nil, fmt.Errorf(T("err.fetch_release"), s.RepoSlug())
 }
 
 // MatchAsset finds the release asset matching the running platform.
@@ -93,7 +93,7 @@ func (s *ServiceDef) MatchAsset(rel *githubRelease) (*githubAsset, error) {
 			return a, nil
 		}
 	}
-	return nil, fmt.Errorf("архив для архитектуры %s не найден (доступно: %s)",
+	return nil, fmt.Errorf(T("err.arch_not_found"),
 		arch, assetNames(rel.Assets))
 }
 
@@ -209,7 +209,7 @@ func extractBinary(tarballPath, namePrefix string) (string, error) {
 			return out.Name(), nil
 		}
 	}
-	return "", fmt.Errorf("бинарный файл %q не найден в архиве", namePrefix)
+	return "", fmt.Errorf(T("err.binary_not_in_arch"), namePrefix)
 }
 
 // extractBinaryFromZip pulls the executable out of a .zip archive into
@@ -247,7 +247,7 @@ func extractBinaryFromZip(zipPath, namePrefix string) (string, error) {
 			return out.Name(), nil
 		}
 	}
-	return "", fmt.Errorf("бинарный файл %q не найден в архиве", namePrefix)
+	return "", fmt.Errorf(T("err.binary_not_in_arch"), namePrefix)
 }
 
 // --- install ---------------------------------------------------------------
@@ -306,7 +306,7 @@ func privilegedCopy(src, dst string) error {
 	if _, err := exec.LookPath("sudo"); err == nil {
 		return exec.Command("sudo", "sh", "-c", shellCmd).Run()
 	}
-	return fmt.Errorf("ни pkexec, ни sudo не доступны — нельзя установить в /usr/local/bin")
+	return fmt.Errorf(T("err.no_privilege"))
 }
 
 // FinalizeInstall persists the binary path to the config, updates the

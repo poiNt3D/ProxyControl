@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -31,7 +30,7 @@ func CheckNetwork(port int, proxyType string) string {
 	cmd := exec.Command("curl", args...)
 	label := strings.ToUpper(proxyType) // "SOCKS5" or "HTTP"
 	if err := cmd.Run(); err != nil {
-		return fmt.Sprintf("❌ НЕТ СОЕДИНЕНИЯ (%s :%d не отвечает)", label, port)
+		return T("net.no_conn", label, port)
 	}
-	return fmt.Sprintf("⚡ ПОДКЛЮЧЕНО (%s :%d работает)", label, port)
+	return T("net.connected", label, port)
 }
