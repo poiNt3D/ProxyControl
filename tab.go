@@ -125,12 +125,12 @@ func (t *serviceTab) initNormalWidgets() {
 		canvas.NewRectangle(color.Transparent))
 	dotCell := container.NewVBox(dotSpacer, dotInner)
 
-	t.stateText = widget.NewLabel("Остановлен")
+	t.stateText = widget.NewLabel(T("status.stopped"))
 	t.stateText.TextStyle = fyne.TextStyle{Bold: true}
 
-	portVal, portField := newStatusField("Порт")
+	portVal, portField := newStatusField(T("status.port"))
 	t.portVal = portVal
-	autoVal, autoField := newStatusField("Автозапуск")
+	autoVal, autoField := newStatusField(T("status.autostart"))
 	t.autoVal = autoVal
 
 	statusRow := container.NewHBox(
@@ -146,7 +146,7 @@ func (t *serviceTab) initNormalWidgets() {
 	t.topPanel = container.NewVBox(statusRow, t.network)
 
 	// --- Log panel (collapsible) ---
-	t.logHeader = widget.NewButton("Лог ▸", t.onToggleLog)
+	t.logHeader = widget.NewButton(T("log.collapsed"), t.onToggleLog)
 	t.logHeader.Importance = widget.LowImportance
 
 	t.logLabel = widget.NewLabel("")
@@ -155,7 +155,7 @@ func (t *serviceTab) initNormalWidgets() {
 	t.logScroll.SetMinSize(fyne.NewSize(0, 200))
 
 	// --- Control buttons ---
-	t.startBtn = widget.NewButton("▶ Старт", func() {
+	t.startBtn = widget.NewButton(T("btn.start"), func() {
 		if t.svc.IsActive() {
 			_ = t.svc.Restart()
 			t.refreshStatus()
@@ -163,8 +163,8 @@ func (t *serviceTab) initNormalWidgets() {
 		}
 		if !t.svc.HasActiveConfig() {
 			dialog.ShowInformation(
-				fmt.Sprintf("%s: не выбран конфиг", t.svc.Label),
-				"Активный конфиг не найден.\n\nСначала выберите профиль в выпадающем списке справа.",
+				T("config.no_config_title", t.svc.Label),
+				T("config.no_config_body"),
 				t.win,
 			)
 			return
@@ -173,12 +173,12 @@ func (t *serviceTab) initNormalWidgets() {
 		t.refreshStatus()
 	})
 
-	stopBtn := widget.NewButton("⏹ Стоп", func() {
+	stopBtn := widget.NewButton(T("btn.stop"), func() {
 		_ = t.svc.Stop()
 		t.refreshStatus()
 	})
 
-	settingsBtn := widget.NewButton("⚙ Настройки", t.onSettings)
+	settingsBtn := widget.NewButton(T("btn.settings"), t.onSettings)
 
 	leftBtns := container.NewHBox(t.startBtn, stopBtn, settingsBtn)
 
@@ -186,7 +186,7 @@ func (t *serviceTab) initNormalWidgets() {
 	var rightSide fyne.CanvasObject
 	if t.svc.HasProfiles {
 		t.buildConfigSelect()
-		cfgLabel := widget.NewLabel("Конфиг")
+		cfgLabel := widget.NewLabel(T("config.label"))
 		rightSide = container.NewHBox(cfgLabel, t.configSelect)
 	}
 
@@ -203,9 +203,9 @@ func (t *serviceTab) initNormalWidgets() {
 func (t *serviceTab) enterNormalMode(logVisible bool) {
 	t.content = t.buildContent(logVisible)
 	if !t.logVisibleState() && logVisible {
-		t.logHeader.SetText("Лог ▾")
+		t.logHeader.SetText(T("log.expanded"))
 	} else {
-		t.logHeader.SetText("Лог ▸")
+		t.logHeader.SetText(T("log.collapsed"))
 	}
 	t.refreshStatus()
 	t.refreshLog()
@@ -223,7 +223,7 @@ func (t *serviceTab) enterNormalMode(logVisible bool) {
 func (t *serviceTab) logVisibleState() bool {
 	// After enterNormalMode/buildContent the header text tells us: "▾"
 	// means expanded, "▸" means collapsed.
-	return t.logHeader != nil && t.logHeader.Text == "Лог ▾"
+	return t.logHeader != nil && t.logHeader.Text == T("log.expanded")
 }
 
 // buildConfigSelect creates the inline profile dropdown.  The callback
@@ -237,7 +237,7 @@ func (t *serviceTab) buildConfigSelect() {
 		_ = t.svc.ApplyProfile(selected)
 		t.refreshAll()
 	})
-	t.configSelect.PlaceHolder = "(не выбран)"
+	t.configSelect.PlaceHolder = T("config.placeholder")
 
 	t.suppressConfig = true
 	if active := t.svc.ActiveProfileName(); active != "" {
@@ -271,15 +271,15 @@ func (t *serviceTab) buildContent(includeLog bool) fyne.CanvasObject {
 // binary is not found.  The layout is kept compact (title + path + a
 // centered button row) so it fits in the collapsed window height.
 func (t *serviceTab) buildInstallContent() fyne.CanvasObject {
-	title := widget.NewLabel(fmt.Sprintf("⚠ %s: бинарный файл не найден", t.svc.Label))
+	title := widget.NewLabel(T("install.binary_not_found", t.svc.Label))
 	title.Alignment = fyne.TextAlignCenter
 	title.TextStyle = fyne.TextStyle{Bold: true}
 
 	path := widget.NewLabel(t.svc.BinaryPath())
 	path.Alignment = fyne.TextAlignCenter
 
-	selectBtn := widget.NewButton("📁 Выбрать файл", t.onSelectBinary)
-	downloadBtn := widget.NewButton("⬇ Скачать с GitHub", t.onDownloadBinary)
+	selectBtn := widget.NewButton(T("btn.select_file"), t.onSelectBinary)
+	downloadBtn := widget.NewButton(T("btn.download_github"), t.onDownloadBinary)
 
 	buttons := container.NewHBox(selectBtn, downloadBtn)
 	centered := container.NewHBox(layout.NewSpacer(), buttons, layout.NewSpacer())
@@ -301,7 +301,7 @@ func (t *serviceTab) onSelectBinary() {
 
 		// Validate it looks like a file (not a directory).
 		if info, e := os.Stat(path); e != nil || info.IsDir() {
-			dialog.ShowError(fmt.Errorf("выбранный путь не является файлом"), t.win)
+			dialog.ShowError(fmt.Errorf(T("install.not_a_file")), t.win)
 			return
 		}
 
@@ -341,12 +341,12 @@ func (t *serviceTab) downloadWithProgress(onDone func(tmpBinary string)) {
 	progress := widget.NewProgressBar()
 	progress.Min = 0
 	progress.Max = 1
-	statusLabel := widget.NewLabel("Получение информации о релизе…")
+	statusLabel := widget.NewLabel(T("install.fetching_release"))
 	statusLabel.Alignment = fyne.TextAlignCenter
 
 	content := container.NewVBox(statusLabel, progress)
 	dlg := dialog.NewCustomWithoutButtons(
-		fmt.Sprintf("Скачивание %s", t.svc.Label), content, t.win)
+		T("install.downloading", t.svc.Label), content, t.win)
 	dlg.Show()
 
 	go func() {
@@ -356,7 +356,7 @@ func (t *serviceTab) downloadWithProgress(onDone func(tmpBinary string)) {
 			t.showError(err)
 			return
 		}
-		statusLabel.SetText(fmt.Sprintf("Скачивание %s…", rel.TagName))
+		statusLabel.SetText(T("install.downloading_tag", rel.TagName))
 		tmp, err := t.svc.DownloadAndExtract(rel, func(done, total int64) {
 			if total > 0 {
 				progress.SetValue(float64(done) / float64(total))
@@ -383,16 +383,16 @@ func (t *serviceTab) askInstallLocation(tmpBinary string) {
 	// Declare up front so the button closures can hide the dialog.
 	var dlg *dialog.CustomDialog
 
-	userBtn := widget.NewButton(fmt.Sprintf("📂 %s (без sudo)", userDir), func() {
+	userBtn := widget.NewButton(T("install.user_dir", userDir), func() {
 		dlg.Hide()
 		t.doInstall(tmpBinary, userDir+"/"+t.svc.BinaryName())
 	})
-	systemBtn := widget.NewButton(fmt.Sprintf("🔐 %s (sudo)", systemDir), func() {
+	systemBtn := widget.NewButton(T("install.system_dir", systemDir), func() {
 		dlg.Hide()
 		t.doInstall(tmpBinary, systemDir+"/"+t.svc.BinaryName())
 	})
 
-	msg := widget.NewLabel("Куда установить бинарный файл?")
+	msg := widget.NewLabel(T("install.where_to_install"))
 	msg.Alignment = fyne.TextAlignCenter
 
 	content := container.NewVBox(msg, userBtn, systemBtn)
@@ -409,7 +409,7 @@ func (t *serviceTab) doInstall(tmpBinary, destPath string) {
 	systemWide := strings.HasPrefix(destPath, SystemBinDir())
 
 	dlg := dialog.NewCustomWithoutButtons(
-		"Установка…", widget.NewLabel("Копирование файла…"), t.win)
+		"Установка…", widget.NewLabel(T("install.copying")), t.win)
 	if systemWide {
 		dlg.Show() // pkexec will block; show the busy dialog
 	}
@@ -458,9 +458,9 @@ func (t *serviceTab) setLogVisible(visible bool) {
 	t.content = t.buildContent(visible)
 	t.content.Refresh()
 	if visible {
-		t.logHeader.SetText("Лог ▾")
+		t.logHeader.SetText(T("log.expanded"))
 	} else {
-		t.logHeader.SetText("Лог ▸")
+		t.logHeader.SetText(T("log.collapsed"))
 	}
 }
 
@@ -474,24 +474,24 @@ func (t *serviceTab) refreshStatus() {
 
 	if active {
 		t.stateDot.FillColor = color.NRGBA{R: 40, G: 180, B: 40, A: 255} // green
-		t.stateText.SetText("Запущен")
+		t.stateText.SetText(T("status.running"))
 	} else {
 		t.stateDot.FillColor = color.NRGBA{R: 200, G: 40, B: 40, A: 255} // red
-		t.stateText.SetText("Остановлен")
+		t.stateText.SetText(T("status.stopped"))
 	}
 	t.stateDot.Refresh()
 
-	autoStr := "Выкл"
+	autoStr := T("status.autostart_off")
 	if enabled {
-		autoStr = "Вкл"
+		autoStr = T("status.autostart_on")
 	}
 	t.portVal.SetText(fmt.Sprintf("%d", port))
 	t.autoVal.SetText(autoStr)
 
 	if active {
-		t.startBtn.SetText("♻ Рестарт")
+		t.startBtn.SetText(T("btn.restart"))
 	} else {
-		t.startBtn.SetText("▶ Старт")
+		t.startBtn.SetText(T("btn.start"))
 	}
 
 	t.refreshConfigDropdown()
@@ -559,7 +559,7 @@ func (t *serviceTab) refreshNetwork() {
 		active := t.svc.IsActive()
 		port := t.svc.Port()
 		if !active {
-			t.network.SetText(fmt.Sprintf("⏸ Сервис остановлен (порт :%d)", port))
+			t.network.SetText(T("status.svc_stopped", port))
 			return
 		}
 		t.network.SetText(CheckNetwork(port, t.svc.ProxyType()))

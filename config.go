@@ -42,6 +42,7 @@ type Config struct {
 	BDRepo       string `json:"bd_repo"`       // byedpi GitHub fork slug
 	NDRepo       string `json:"nd_repo"`       // nodpi GitHub fork slug
 	CheckUpdates bool   `json:"check_updates"` // check for binary updates on startup
+	Language     string `json:"language"`      // UI language code ("en", "ru", …)
 }
 
 // configDir returns ~/.config/proxycontrol (the same dir the bash version used).
@@ -262,5 +263,5 @@ func (cfg *Config) SetRepoForService(key, slug string) {
 
 // String returns a human-readable summary (for debugging).
 func (cfg *Config) String() string {
-	return fmt.Sprintf("WP:%d BD:%d ND:%d", cfg.WPPort, cfg.BDPort, cfg.NDPort)
+	return fmt.Sprintf("WP:%d BD:%d ND:%d lang=%s", cfg.WPPort, cfg.BDPort, cfg.NDPort, cfg.Language)
 }

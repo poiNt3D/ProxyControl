@@ -37,6 +37,11 @@ func main() {
 
 	cfg := LoadConfig()
 
+	// Detect system language on first launch, write the built-in
+	// language files to disk, and load the active string table.  Must
+	// happen before any UI is built so all T() calls resolve correctly.
+	InitLang(cfg)
+
 	// Make sure the systemd user units exist (wireproxy, byedpi, and the
 	// resume monitor).  Creates any that are missing, daemon-reloads, and
 	// enables+starts the resume monitor.  Idempotent — safe every launch.
@@ -45,7 +50,7 @@ func main() {
 	a := app.New()
 	a.SetIcon(nil) // TODO: bundle an icon
 
-	w := a.NewWindow("ProxyControl")
+	w := a.NewWindow(T("app.title"))
 	w.Resize(fyne.NewSize(720, logCollapsedHeight)) // start collapsed
 
 	pa := &ProxyApp{cfg: cfg, win: w, logCollapsed: true}
@@ -72,10 +77,10 @@ func main() {
 	go pa.cmTab.statusLoop()
 
 	pa.tabs = container.NewAppTabs(
-		container.NewTabItem("Общий", pa.cmTab.Content()),
-		container.NewTabItem("WireProxy", pa.wpTab.Content()),
-		container.NewTabItem("ByeDPI", pa.bdTab.Content()),
-		container.NewTabItem("NoDPI", pa.ndTab.Content()),
+		container.NewTabItem(T("tab.combined"), pa.cmTab.Content()),
+		container.NewTabItem(T("tab.wireproxy"), pa.wpTab.Content()),
+		container.NewTabItem(T("tab.byedpi"), pa.bdTab.Content()),
+		container.NewTabItem(T("tab.nodpi"), pa.ndTab.Content()),
 	)
 	pa.tabs.SetTabLocation(container.TabLocationTop)
 
@@ -95,13 +100,13 @@ func main() {
 	// Persist tab selection on change.
 	pa.tabs.OnSelected = func(tab *container.TabItem) {
 		switch tab.Text {
-		case "Общий":
+		case T("tab.combined"):
 			SaveLastTab("combined")
-		case "WireProxy":
+		case T("tab.wireproxy"):
 			SaveLastTab("wireproxy")
-		case "ByeDPI":
+		case T("tab.byedpi"):
 			SaveLastTab("byedpi")
-		case "NoDPI":
+		case T("tab.nodpi"):
 			SaveLastTab("nodpi")
 		}
 	}
@@ -201,7 +206,7 @@ func (pa *ProxyApp) checkUpdatesOnStartup() {
 // triggers the update flow (download + install over the existing
 // binary) and dismisses the dialog.
 func (pa *ProxyApp) showUpdateDialog(updates []updateInfo) {
-	title := widget.NewLabel("Доступны обновления бинарных файлов:")
+	title := widget.NewLabel(T("update.available"))
 	title.TextStyle = fyne.TextStyle{Bold: true}
 
 	// Declare dlg up front so the button closures can capture it.
@@ -210,24 +215,23 @@ func (pa *ProxyApp) showUpdateDialog(updates []updateInfo) {
 	var rows []fyne.CanvasObject
 	rows = append(rows, title)
 	for _, u := range updates {
-		info := widget.NewLabel(fmt.Sprintf("%s:  %s → %s",
-			u.tab.svc.Label, u.current, u.latest))
+		info := widget.NewLabel(T("update.info", u.tab.svc.Label, u.current, u.latest))
 
 		// Capture u for the closure.
 		uu := u
-		dlBtn := widget.NewButton("Скачать", func() {
+		dlBtn := widget.NewButton(T("btn.download"), func() {
 			dlg.Hide()
 			uu.tab.onUpdateBinary()
 		})
 		rows = append(rows, container.NewHBox(info, dlBtn))
 	}
 
-	closeBtn := widget.NewButton("Закрыть", func() { dlg.Hide() })
+	closeBtn := widget.NewButton(T("btn.close"), func() { dlg.Hide() })
 	rows = append(rows, closeBtn)
 
 	content := container.NewVBox(rows...)
 
-	dlg = dialog.NewCustomWithoutButtons("Обновления", content, pa.win)
+	dlg = dialog.NewCustomWithoutButtons(T("update.title"), content, pa.win)
 	dlg.Show()
 }
 

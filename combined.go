@@ -58,7 +58,7 @@ func (c *CombinedMode) SetBackend(services map[string]*ServiceDef, key string) e
 
 	svc := services[key]
 	if svc == nil {
-		return fmt.Errorf("неизвестный сервис: %s", key)
+		return fmt.Errorf(T("err.unknown_service"), key)
 	}
 
 	// Start the backend service if it is not already running.
@@ -67,7 +67,7 @@ func (c *CombinedMode) SetBackend(services map[string]*ServiceDef, key string) e
 			svc.EnsureDefaultConfig()
 		}
 		if err := svc.Start(); err != nil {
-			return fmt.Errorf("не удалось запустить %s: %v", svc.Label, err)
+			return fmt.Errorf(T("err.cannot_start"), svc.Label, err)
 		}
 		// Give the backend a moment to bind its port before we chain to it.
 		time.Sleep(500 * time.Millisecond)
@@ -75,7 +75,7 @@ func (c *CombinedMode) SetBackend(services map[string]*ServiceDef, key string) e
 
 	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", combinedPort))
 	if err != nil {
-		return fmt.Errorf("не удалось слушать порт :%d: %v", combinedPort, err)
+		return fmt.Errorf(T("err.cannot_listen"), combinedPort, err)
 	}
 
 	c.mu.Lock()
@@ -316,7 +316,7 @@ func dialHTTPProxy(proxyAddr, target string) (net.Conn, error) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		c.Close()
-		return nil, fmt.Errorf("HTTP-прокси %s отклонил CONNECT: %s", proxyAddr, resp.Status)
+		return nil, fmt.Errorf(T("err.http_proxy_reject"), proxyAddr, resp.Status)
 	}
 	// Preserve any bytes the proxy sent right after the headers.
 	if br.Buffered() > 0 {

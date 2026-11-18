@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"time"
 
 	"fyne.io/fyne/v2"
@@ -35,14 +34,14 @@ type combinedTab struct {
 func newCombinedTab(cm *CombinedMode, services map[string]*ServiceDef, win fyne.Window) *combinedTab {
 	t := &combinedTab{cm: cm, services: services, win: win}
 
-	title := widget.NewLabel("Общий режим")
+	title := widget.NewLabel(T("combined.title"))
 	title.TextStyle = fyne.TextStyle{Bold: true}
 
-	t.status = widget.NewLabel("⏸ Выкл (порт :8880 свободен)")
+	t.status = widget.NewLabel(T("combined.status_off"))
 	t.status.TextStyle = fyne.TextStyle{Italic: true}
 
 	t.radio = widget.NewRadioGroup(
-		[]string{"Выкл", "WireProxy", "ByeDPI", "NoDPI"},
+		[]string{T("combined.off"), "WireProxy", "ByeDPI", "NoDPI"},
 		func(sel string) {
 			if t.suppress {
 				return
@@ -76,7 +75,7 @@ func (t *combinedTab) Restore(key string) {
 	if err := t.cm.SetBackend(t.services, key); err != nil {
 		dialog.ShowError(err, t.win)
 		t.suppress = true
-		t.radio.SetSelected("Выкл")
+		t.radio.SetSelected(T("combined.off"))
 		t.suppress = false
 	}
 	t.refreshStatus()
@@ -90,7 +89,7 @@ func (t *combinedTab) applySelection(sel string) {
 	if err := t.cm.SetBackend(t.services, key); err != nil {
 		dialog.ShowError(err, t.win)
 		t.suppress = true
-		t.radio.SetSelected("Выкл")
+		t.radio.SetSelected(T("combined.off"))
 		t.suppress = false
 		SaveCombinedBackend("off")
 		t.refreshStatus()
@@ -105,19 +104,18 @@ func (t *combinedTab) applySelection(sel string) {
 func (t *combinedTab) refreshStatus() {
 	backend := t.cm.Backend()
 	if backend == "off" || backend == "" {
-		t.status.SetText("⏸ Выкл (порт :8880 свободен)")
+		t.status.SetText(T("combined.status_off"))
 		return
 	}
 	svc := t.services[backend]
 	if svc == nil {
-		t.status.SetText("⏸ Выкл")
+		t.status.SetText(T("combined.status_off_short"))
 		return
 	}
 	if svc.IsActive() {
-		t.status.SetText(fmt.Sprintf("⚡ 127.0.0.1:%d → %s :%d",
-			combinedPort, svc.Label, svc.Port()))
+		t.status.SetText(T("combined.status_active", combinedPort, svc.Label, svc.Port()))
 	} else {
-		t.status.SetText(fmt.Sprintf("⚠ %s остановлен — соединения через :8880 не пройдут", svc.Label))
+		t.status.SetText(T("combined.status_stopped", svc.Label))
 	}
 }
 
@@ -154,5 +152,5 @@ func labelForKey(key string) string {
 	case "nodpi":
 		return "NoDPI"
 	}
-	return "Выкл"
+	return T("combined.off")
 }
