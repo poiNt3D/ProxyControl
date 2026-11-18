@@ -34,6 +34,9 @@ type CombinedMode struct {
 	port     int    // backend port (0 when off)
 	ptype    string // "socks5" or "http"
 	listener net.Listener
+
+	splitEnabled bool           // split-tunnel on/off
+	matcher      *domainMatcher // compiled domain patterns (nil when off)
 }
 
 // SetBackend selects the backend proxy to chain to.  If key is "off" the
@@ -118,6 +121,39 @@ func (c *CombinedMode) Stop() {
 	c.ptype = ""
 }
 
+// SetSplit enables or disables split tunneling and updates the
+// domain pattern list.  When enabled, the combined listener peeks at
+// each connection's domain (from the SOCKS5 target, or from the TLS
+// SNI / HTTP Host when the target is an IP) and routes through the
+// backend proxy only if the domain matches a pattern; everything else
+// gets a direct connection.  Safe to call while the listener is
+// running — the next accepted connection picks up the new settings.
+func (c *CombinedMode) SetSplit(enabled bool, domains []string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.splitEnabled = enabled
+	if enabled {
+		c.matcher = newDomainMatcher(domains)
+	} else {
+		c.matcher = nil
+	}
+}
+
+// SplitEnabled reports whether split tunneling is currently on.
+func (c *CombinedMode) SplitEnabled() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.splitEnabled
+}
+
+// SplitDomainCount returns the number of compiled domain patterns, or
+// 0 if split tunneling is disabled.
+func (c *CombinedMode) SplitDomainCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.matcher.count()
+}
+
 // acceptLoop accepts connections on ln until it is closed.  Each
 // listener gets its own loop so a SetBackend restart (which closes the
 // old listener) cleanly terminates the old loop.
@@ -131,8 +167,18 @@ func (c *CombinedMode) acceptLoop(ln net.Listener) {
 	}
 }
 
-// handle services one SOCKS5 client connection: handshake, dial the
-// target through the backend, reply, then relay.
+// handle services one SOCKS5 client connection: handshake, decide
+// whether to route through the backend proxy or directly (split
+// tunneling), dial the target, reply, then relay.
+//
+// Split-tunnel decision:
+//   - Split disabled → always use the backend proxy.
+//   - Split enabled, SOCKS5 target is a domain → check the domain
+//     against the pattern list; match = proxy, no match = direct.
+//   - Split enabled, SOCKS5 target is an IP → peek at the first
+//     application packet (TLS ClientHello SNI or HTTP Host header)
+//     to recover the domain, then check the list.  If no domain can
+//     be extracted, fall back to direct.
 func (c *CombinedMode) handle(client net.Conn) {
 	defer client.Close()
 	// Give the handshake a deadline so a half-open client cannot hold a
@@ -143,6 +189,8 @@ func (c *CombinedMode) handle(client net.Conn) {
 	port := c.port
 	ptype := c.ptype
 	backend := c.backend
+	splitEnabled := c.splitEnabled
+	matcher := c.matcher
 	c.mu.Unlock()
 
 	if backend == "off" || port == 0 {
@@ -156,10 +204,93 @@ func (c *CombinedMode) handle(client net.Conn) {
 	if err != nil {
 		return
 	}
-	// Handshake done — clear the deadline for the relay phase.
-	client.SetDeadline(time.Time{})
 
-	// If bufio buffered extra bytes, wrap the conn so they are seen first.
+	host, _, _ := net.SplitHostPort(target)
+	isIP := net.ParseIP(host) != nil
+
+	// Determine the routing decision and any first-packet data we need
+	// to forward to the remote.
+	var firstPacket []byte
+	replied := false // true once we've sent the SOCKS5 success reply
+	useProxy := true
+
+	switch {
+	case !splitEnabled:
+		// Everything goes through the proxy.
+
+	case !isIP:
+		// Domain target — decide directly from the hostname.
+		useProxy = matcher.match(host)
+
+	default:
+		// IP target — peek at the first application packet to recover
+		// the domain via TLS SNI or HTTP Host header.
+		if br.Buffered() > 0 {
+			firstPacket = make([]byte, br.Buffered())
+			_, _ = io.ReadFull(br, firstPacket)
+		}
+		// If the client did not pipeline, we must send the success
+		// reply so it starts sending data, then read the first packet.
+		if len(firstPacket) == 0 {
+			if err := socks5Reply(client, 0x00); err != nil {
+				return
+			}
+			replied = true
+			client.SetDeadline(time.Now().Add(10 * time.Second))
+			buf := make([]byte, 4096)
+			n, rerr := br.Read(buf)
+			if rerr != nil || n == 0 {
+				return // client sent nothing
+			}
+			firstPacket = buf[:n]
+		}
+		client.SetDeadline(time.Time{})
+
+		domain := extractDomain(firstPacket)
+		if domain != "" {
+			useProxy = matcher.match(domain)
+		} else {
+			// No domain recoverable — go direct.
+			useProxy = false
+		}
+	}
+
+	// Connect to the target — through the backend proxy or directly.
+	backendAddr := fmt.Sprintf("127.0.0.1:%d", port)
+	var remote net.Conn
+	if useProxy {
+		if ptype == "http" {
+			remote, err = dialHTTPProxy(backendAddr, target)
+		} else {
+			remote, err = dialSOCKS5(backendAddr, target)
+		}
+	} else {
+		remote, err = net.DialTimeout("tcp", target, 10*time.Second)
+	}
+	if err != nil {
+		if !replied {
+			_ = socks5Reply(client, 0x01) // general SOCKS server failure
+		}
+		return
+	}
+	defer remote.Close()
+
+	// Send the success reply unless the peek path already sent it.
+	if !replied {
+		if err := socks5Reply(client, 0x00); err != nil {
+			return
+		}
+	}
+
+	// Forward any first packet we read early (SNI peek) to the remote.
+	if len(firstPacket) > 0 {
+		if _, err := remote.Write(firstPacket); err != nil {
+			return
+		}
+	}
+
+	// If the bufio.Reader still has buffered bytes (client pipelined
+	// after the first packet), wrap the conn so they are seen first.
 	var conn net.Conn = client
 	if br.Buffered() > 0 {
 		buf := make([]byte, br.Buffered())
@@ -168,23 +299,6 @@ func (c *CombinedMode) handle(client net.Conn) {
 			r:    io.MultiReader(bytes.NewReader(buf), client),
 			Conn: client,
 		}
-	}
-
-	backendAddr := fmt.Sprintf("127.0.0.1:%d", port)
-	var remote net.Conn
-	if ptype == "http" {
-		remote, err = dialHTTPProxy(backendAddr, target)
-	} else {
-		remote, err = dialSOCKS5(backendAddr, target)
-	}
-	if err != nil {
-		_ = socks5Reply(client, 0x01) // general SOCKS server failure
-		return
-	}
-	defer remote.Close()
-
-	if err := socks5Reply(client, 0x00); err != nil {
-		return
 	}
 
 	relay(conn, remote)

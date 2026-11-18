@@ -73,7 +73,7 @@ func main() {
 	// selected backend.  Built before the tabs so the first tab item is
 	// the combined radio control.
 	pa.cm = &CombinedMode{}
-	pa.cmTab = newCombinedTab(pa.cm, services, w)
+	pa.cmTab = newCombinedTab(pa.cm, services, w, cfg)
 	go pa.cmTab.statusLoop()
 
 	pa.tabs = container.NewAppTabs(

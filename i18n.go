@@ -71,6 +71,13 @@ var enStrings = map[string]string{
 	"combined.status_active":     "⚡ 127.0.0.1:%d → %s :%d",
 	"combined.status_stopped":    "⚠ %s stopped — connections via :8880 will fail",
 
+	// split tunneling (combined mode)
+	"split.enable":        "Split tunneling",
+	"split.domains_btn":   "Domain list…",
+	"split.domains_title": "Split tunneling domains",
+	"split.hint":          "One domain per line. Wildcards: *.example.com matches subdomains, * matches everything.",
+	"split.status_on":     "Split: %d domain(s) — proxy only for matches",
+
 	// service status panel
 	"status.stopped":        "Stopped",
 	"status.running":        "Running",
@@ -178,6 +185,13 @@ var ruStrings = map[string]string{
 	"combined.status_off_short":  "⏸ Выкл",
 	"combined.status_active":     "⚡ 127.0.0.1:%d → %s :%d",
 	"combined.status_stopped":    "⚠ %s остановлен — соединения через :8880 не пройдут",
+
+	// split tunneling (combined mode)
+	"split.enable":        "Раздельное туннелирование",
+	"split.domains_btn":   "Список доменов…",
+	"split.domains_title": "Домены раздельного туннелирования",
+	"split.hint":          "По одному домену на строку. Маски: *.example.com — поддомены, * — все домены.",
+	"split.status_on":     "Сплит: %d домен(ов) — прокси только для совпадений",
 
 	// service status panel
 	"status.stopped":        "Остановлен",

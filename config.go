@@ -41,8 +41,10 @@ type Config struct {
 	WPRepo       string `json:"wp_repo"`       // wireproxy GitHub fork slug
 	BDRepo       string `json:"bd_repo"`       // byedpi GitHub fork slug
 	NDRepo       string `json:"nd_repo"`       // nodpi GitHub fork slug
-	CheckUpdates bool   `json:"check_updates"` // check for binary updates on startup
-	Language     string `json:"language"`      // UI language code ("en", "ru", …)
+	CheckUpdates bool     `json:"check_updates"` // check for binary updates on startup
+	Language     string   `json:"language"`      // UI language code ("en", "ru", …)
+	SplitEnabled bool     `json:"split_enabled"` // combined-mode split tunneling
+	SplitDomains []string `json:"split_domains"` // domain patterns for split tunneling
 }
 
 // configDir returns ~/.config/proxycontrol (the same dir the bash version used).
