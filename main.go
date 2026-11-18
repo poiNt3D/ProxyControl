@@ -17,9 +17,11 @@ type ProxyApp struct {
 	cfg          *Config
 	win          fyne.Window
 	tabs         *container.AppTabs
+	cmTab        *combinedTab
 	wpTab        *serviceTab
 	bdTab        *serviceTab
 	ndTab        *serviceTab
+	cm           *CombinedMode
 	logCollapsed bool
 }
 
@@ -52,29 +54,49 @@ func main() {
 	wpSvc := NewService("wireproxy", cfg)
 	bdSvc := NewService("byedpi", cfg)
 	ndSvc := NewService("nodpi", cfg)
+	services := map[string]*ServiceDef{
+		"wireproxy": wpSvc,
+		"byedpi":    bdSvc,
+		"nodpi":     ndSvc,
+	}
 
 	pa.wpTab = newServiceTab(wpSvc, cfg, w, pa.showSettings, pa.toggleLog, pa.rebuildTab)
 	pa.bdTab = newServiceTab(bdSvc, cfg, w, pa.showSettings, pa.toggleLog, pa.rebuildTab)
 	pa.ndTab = newServiceTab(ndSvc, cfg, w, pa.showSettings, pa.toggleLog, pa.rebuildTab)
 
+	// Combined (Общий) mode: SOCKS5 listener on :8880 that chains to the
+	// selected backend.  Built before the tabs so the first tab item is
+	// the combined radio control.
+	pa.cm = &CombinedMode{}
+	pa.cmTab = newCombinedTab(pa.cm, services, w)
+	go pa.cmTab.statusLoop()
+
 	pa.tabs = container.NewAppTabs(
+		container.NewTabItem("Общий", pa.cmTab.Content()),
 		container.NewTabItem("WireProxy", pa.wpTab.Content()),
 		container.NewTabItem("ByeDPI", pa.bdTab.Content()),
 		container.NewTabItem("NoDPI", pa.ndTab.Content()),
 	)
 	pa.tabs.SetTabLocation(container.TabLocationTop)
 
-	// Restore the last-selected tab.
+	// Restore the last-selected tab.  Combined is index 0; the three
+	// service tabs follow at 1/2/3.
 	switch LoadLastTab() {
-	case "byedpi":
+	case "wireproxy":
 		pa.tabs.SelectIndex(1)
-	case "nodpi":
+	case "byedpi":
 		pa.tabs.SelectIndex(2)
+	case "nodpi":
+		pa.tabs.SelectIndex(3)
+	default: // "combined"
+		pa.tabs.SelectIndex(0)
 	}
 
 	// Persist tab selection on change.
 	pa.tabs.OnSelected = func(tab *container.TabItem) {
 		switch tab.Text {
+		case "Общий":
+			SaveLastTab("combined")
 		case "WireProxy":
 			SaveLastTab("wireproxy")
 		case "ByeDPI":
@@ -85,7 +107,18 @@ func main() {
 	}
 
 	w.SetContent(pa.tabs)
-	w.SetOnClosed(func() { a.Quit() })
+	w.SetOnClosed(func() {
+		pa.cm.Stop() // close the combined listener on exit
+		a.Quit()
+	})
+
+	// Restore the combined-mode backend selection shortly after the
+	// window opens, so any start-up error dialog is visible.
+	if saved := LoadCombinedBackend(); saved != "" && saved != "off" {
+		time.AfterFunc(1500*time.Millisecond, func() {
+			pa.cmTab.Restore(saved)
+		})
+	}
 
 	// Check for binary updates on startup if the user opted in.
 	go pa.checkUpdatesOnStartup()
@@ -117,11 +150,11 @@ func (pa *ProxyApp) showSettings() {
 // rebuildTab is called by a service tab after it swaps its content
 // (e.g. after installing a binary and switching from install mode to
 // normal mode).  It refreshes the AppTabs items so the new content is
-// displayed.
+// displayed.  The combined tab (index 0) is never rebuilt here.
 func (pa *ProxyApp) rebuildTab() {
-	pa.tabs.Items[0].Content = pa.wpTab.Content()
-	pa.tabs.Items[1].Content = pa.bdTab.Content()
-	pa.tabs.Items[2].Content = pa.ndTab.Content()
+	pa.tabs.Items[1].Content = pa.wpTab.Content()
+	pa.tabs.Items[2].Content = pa.bdTab.Content()
+	pa.tabs.Items[3].Content = pa.ndTab.Content()
 	pa.tabs.Refresh()
 	pa.win.Content().Refresh()
 }
@@ -209,10 +242,11 @@ func (pa *ProxyApp) toggleLog() {
 	pa.ndTab.setLogVisible(visible)
 
 	// The tab content was rebuilt — update the AppTabs items so the
-	// new content (with or without the scroll) is displayed.
-	pa.tabs.Items[0].Content = pa.wpTab.Content()
-	pa.tabs.Items[1].Content = pa.bdTab.Content()
-	pa.tabs.Items[2].Content = pa.ndTab.Content()
+	// new content (with or without the scroll) is displayed.  The
+	// combined tab (index 0) has no log and is not rebuilt.
+	pa.tabs.Items[1].Content = pa.wpTab.Content()
+	pa.tabs.Items[2].Content = pa.bdTab.Content()
+	pa.tabs.Items[3].Content = pa.ndTab.Content()
 	pa.tabs.Refresh()
 	// Force the content to drop any cached layout from the previous
 	// (expanded) state before we measure its minimum, otherwise MinSize

@@ -55,6 +55,7 @@ func configDir() string {
 
 func configPath() string    { return filepath.Join(configDir(), "proxycontrol.conf") }
 func lastTabPath() string   { return filepath.Join(configDir(), ".last_tab") }
+func combinedBackendPath() string { return filepath.Join(configDir(), ".combined_backend") }
 
 // LoadConfig reads the JSON config file.  If the file does not exist or is
 // invalid JSON, it falls back to the old shell-sourceable format
@@ -148,21 +149,43 @@ func (cfg *Config) Save() error {
 	return os.WriteFile(configPath(), data, 0o644)
 }
 
-// LoadLastTab returns the last-selected tab ("wireproxy" or "byedpi").
+// LoadLastTab returns the last-selected tab.  "combined" is the first
+// tab (the Общий combined-mode tab); the three service tabs follow.
 func LoadLastTab() string {
 	data, err := os.ReadFile(lastTabPath())
 	if err == nil {
 		tab := strings.TrimSpace(string(data))
-		if tab == "wireproxy" || tab == "byedpi" || tab == "nodpi" {
+		switch tab {
+		case "combined", "wireproxy", "byedpi", "nodpi":
 			return tab
 		}
 	}
-	return "wireproxy"
+	return "combined"
 }
 
 // SaveLastTab persists the active tab so it is restored on next launch.
 func SaveLastTab(tab string) {
 	_ = os.WriteFile(lastTabPath(), []byte(tab), 0o644)
+}
+
+// LoadCombinedBackend returns the persisted combined-mode backend key
+// ("off", "wireproxy", "byedpi", or "nodpi"), or "" if unset.
+func LoadCombinedBackend() string {
+	data, err := os.ReadFile(combinedBackendPath())
+	if err != nil {
+		return ""
+	}
+	key := strings.TrimSpace(string(data))
+	switch key {
+	case "off", "wireproxy", "byedpi", "nodpi":
+		return key
+	}
+	return ""
+}
+
+// SaveCombinedBackend persists the combined-mode backend selection.
+func SaveCombinedBackend(key string) {
+	_ = os.WriteFile(combinedBackendPath(), []byte(key), 0o644)
 }
 
 // PortForService returns the configured port for the given service key.
