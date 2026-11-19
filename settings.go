@@ -11,11 +11,15 @@ import (
 	"fyne.io/fyne/v2/widget"
 )
 
-// showSettingsDialog opens a modal form with a language selector,
-// autostart checkboxes, port entries, fork-slug fields, an update-check
-// toggle, and "open folder" buttons for each service.  When the user
-// clicks Apply the changes are persisted and applied to systemd; if the
-// language changed, a restart notice is shown.
+// showSettingsDialog opens a separate, freely-resizable window with a
+// language selector, autostart checkboxes, port entries, fork-slug
+// fields, an update-check toggle, and "open folder" buttons for each
+// service.  A separate window is used instead of a modal dialog because
+// Fyne dialogs are constrained to the parent window's size — with 14
+// form items the settings panel needs more room than the main window
+// may have.  When the user clicks Apply the changes are persisted and
+// applied to systemd; if the language changed, a restart notice is
+// shown.
 func showSettingsDialog(win fyne.Window, cfg *Config, onApplied func()) {
 	wpSvc := NewService("wireproxy", cfg)
 	bdSvc := NewService("byedpi", cfg)
@@ -102,9 +106,9 @@ func showSettingsDialog(win fyne.Window, cfg *Config, onApplied func()) {
 		{Text: T("settings.updates"), Widget: checkUpdatesCheck},
 	}
 
-	// Build a scrollable list of labelled rows.  dialog.NewForm does not
-	// scroll its content, so with 14 items the bottom rows are clipped
-	// by the action buttons on smaller screens.
+	// Build a scrollable list of labelled rows.  A plain VBox does not
+	// scroll, so with 14 items the bottom rows would be clipped on
+	// smaller screens.
 	var rows []fyne.CanvasObject
 	for _, item := range items {
 		label := widget.NewLabel(item.Text)
@@ -112,11 +116,12 @@ func showSettingsDialog(win fyne.Window, cfg *Config, onApplied func()) {
 	}
 	scroll := container.NewVScroll(container.NewVBox(rows...))
 
-	// Declare dlg up front so the button closures can hide it.
-	var dlg *dialog.CustomDialog
+	// Separate window (not a modal dialog) so it can be resized freely
+	// and is not constrained by the parent window's size.
+	sw := fyne.CurrentApp().NewWindow(T("settings.title"))
 
 	applyBtn := widget.NewButton(T("btn.apply"), func() {
-		dlg.Hide()
+		sw.Close()
 		newLang := LangNameToCode(langs, langSelect.Selected)
 		langChanged := newLang != "" && newLang != cfg.Language
 		applySettings(cfg, wpSvc, bdSvc, ndSvc,
@@ -130,15 +135,15 @@ func showSettingsDialog(win fyne.Window, cfg *Config, onApplied func()) {
 		}
 	})
 	cancelBtn := widget.NewButton(T("btn.cancel"), func() {
-		dlg.Hide()
+		sw.Close()
 	})
 
 	bottomBar := container.NewHBox(cancelBtn, applyBtn)
-	dialogContent := container.NewBorder(nil, bottomBar, nil, nil, scroll)
+	content := container.NewBorder(nil, bottomBar, nil, nil, scroll)
 
-	dlg = dialog.NewCustomWithoutButtons(T("settings.title"), dialogContent, win)
-	dlg.Resize(fyne.NewSize(560, 520))
-	dlg.Show()
+	sw.SetContent(content)
+	sw.Resize(fyne.NewSize(560, 520))
+	sw.Show()
 }
 
 // applySettings persists language, port, fork and update-check changes,

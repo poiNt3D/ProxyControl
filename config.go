@@ -43,8 +43,7 @@ type Config struct {
 	NDRepo       string `json:"nd_repo"`       // nodpi GitHub fork slug
 	CheckUpdates bool     `json:"check_updates"` // check for binary updates on startup
 	Language     string   `json:"language"`      // UI language code ("en", "ru", …)
-	SplitEnabled bool     `json:"split_enabled"` // combined-mode split tunneling
-	SplitDomains []string `json:"split_domains"` // domain patterns for split tunneling
+	SplitEnabled bool `json:"split_enabled"` // combined-mode split tunneling
 }
 
 // configDir returns ~/.config/proxycontrol (the same dir the bash version used).
@@ -59,6 +58,7 @@ func configDir() string {
 func configPath() string    { return filepath.Join(configDir(), "proxycontrol.conf") }
 func lastTabPath() string   { return filepath.Join(configDir(), ".last_tab") }
 func combinedBackendPath() string { return filepath.Join(configDir(), ".combined_backend") }
+func splitDomainsPath() string    { return filepath.Join(configDir(), ".split_domains") }
 
 // LoadConfig reads the JSON config file.  If the file does not exist or is
 // invalid JSON, it falls back to the old shell-sourceable format
@@ -189,6 +189,33 @@ func LoadCombinedBackend() string {
 // SaveCombinedBackend persists the combined-mode backend selection.
 func SaveCombinedBackend(key string) {
 	_ = os.WriteFile(combinedBackendPath(), []byte(key), 0o644)
+}
+
+// LoadSplitDomains reads the split-tunnel domain pattern list from
+// ~/.config/proxycontrol/.split_domains (one pattern per line; lines
+// starting with # are comments).  Returns nil if the file does not
+// exist.
+func LoadSplitDomains() []string {
+	data, err := os.ReadFile(splitDomainsPath())
+	if err != nil {
+		return nil
+	}
+	return parseDomainList(string(data))
+}
+
+// SaveSplitDomains writes the split-tunnel domain pattern list to
+// ~/.config/proxycontrol/.split_domains (one pattern per line).
+func SaveSplitDomains(domains []string) error {
+	dir := configDir()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	var b strings.Builder
+	for _, d := range domains {
+		b.WriteString(d)
+		b.WriteByte('\n')
+	}
+	return os.WriteFile(splitDomainsPath(), []byte(b.String()), 0o644)
 }
 
 // PortForService returns the configured port for the given service key.

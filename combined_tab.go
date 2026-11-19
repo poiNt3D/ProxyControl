@@ -21,11 +21,12 @@ type combinedTab struct {
 	win      fyne.Window
 	cfg      *Config
 
-	radio      *widget.RadioGroup
-	status     *widget.Label
-	splitCheck *widget.Check
-	splitLabel *widget.Label
-	content    fyne.CanvasObject
+	radio        *widget.RadioGroup
+	status       *widget.Label
+	splitCheck   *widget.Check
+	splitLabel   *widget.Label
+	splitDomains []string // loaded from ~/.config/proxycontrol/.split_domains
+	content      fyne.CanvasObject
 
 	suppress bool // true during programmatic SetSelected
 }
@@ -36,6 +37,7 @@ type combinedTab struct {
 // settings are applied to the CombinedMode immediately.
 func newCombinedTab(cm *CombinedMode, services map[string]*ServiceDef, win fyne.Window, cfg *Config) *combinedTab {
 	t := &combinedTab{cm: cm, services: services, win: win, cfg: cfg}
+	t.splitDomains = LoadSplitDomains()
 
 	title := widget.NewLabel(T("combined.title"))
 	title.TextStyle = fyne.TextStyle{Bold: true}
@@ -71,7 +73,7 @@ func newCombinedTab(cm *CombinedMode, services map[string]*ServiceDef, win fyne.
 	})
 
 	splitBtn := widget.NewButton(T("split.domains_btn"), func() {
-		t.showSplitDomainsDialog()
+		t.showSplitDomainsWindow()
 	})
 
 	splitRow := container.NewHBox(t.splitCheck, splitBtn)
@@ -140,7 +142,7 @@ func (t *combinedTab) applySelection(sel string) {
 // CombinedMode.  Called on startup and whenever the user toggles the
 // checkbox or edits the domain list.
 func (t *combinedTab) applySplit() {
-	t.cm.SetSplit(t.cfg.SplitEnabled, t.cfg.SplitDomains)
+	t.cm.SetSplit(t.cfg.SplitEnabled, t.splitDomains)
 }
 
 // refreshStatus updates the one-line status label from the current
@@ -169,44 +171,47 @@ func (t *combinedTab) refreshSplitStatus() {
 		t.splitLabel.SetText("")
 		return
 	}
-	n := len(t.cfg.SplitDomains)
-	t.splitLabel.SetText(T("split.status_on", n))
+	t.splitLabel.SetText(T("split.status_on", len(t.splitDomains)))
 }
 
-// showSplitDomainsDialog opens a modal with a multi-line text entry for
-// editing the domain pattern list.  Each line is one pattern; lines
-// starting with # are ignored.  On Apply the list is parsed, saved to
-// config, and applied to the CombinedMode.
-func (t *combinedTab) showSplitDomainsDialog() {
+// showSplitDomainsWindow opens a separate, freely-resizable window for
+// editing the domain pattern list (one per line; lines starting with #
+// are comments).  A separate window is used instead of a modal dialog
+// because Fyne dialogs are constrained to the parent window's size —
+// a multi-line text editor needs room the parent may not have.  On
+// Apply the list is parsed, saved to ~/.config/proxycontrol/.split_domains,
+// and applied to the CombinedMode.
+func (t *combinedTab) showSplitDomainsWindow() {
+	w := fyne.CurrentApp().NewWindow(T("split.domains_title"))
+
 	entry := widget.NewMultiLineEntry()
-	entry.SetMinRowsVisible(12)
+	entry.SetMinRowsVisible(20)
 	entry.Wrapping = fyne.TextWrapOff
-	entry.SetText(strings.Join(t.cfg.SplitDomains, "\n"))
+	entry.SetText(strings.Join(t.splitDomains, "\n"))
 
 	hint := widget.NewLabel(T("split.hint"))
 	hint.TextStyle = fyne.TextStyle{Italic: true}
 
-	content := container.NewVBox(hint, entry)
-
-	var dlg *dialog.CustomDialog
 	applyBtn := widget.NewButton(T("btn.apply"), func() {
 		domains := parseDomainList(entry.Text)
-		t.cfg.SplitDomains = domains
+		if err := SaveSplitDomains(domains); err != nil {
+			dialog.ShowError(err, w)
+			return
+		}
+		t.splitDomains = domains
 		t.applySplit()
-		_ = t.cfg.Save()
 		t.refreshSplitStatus()
-		dlg.Hide()
+		w.Close()
 	})
 	cancelBtn := widget.NewButton(T("btn.cancel"), func() {
-		dlg.Hide()
+		w.Close()
 	})
 
 	bottom := container.NewHBox(cancelBtn, applyBtn)
-	dialogContent := container.NewBorder(nil, bottom, nil, nil, content)
-
-	dlg = dialog.NewCustomWithoutButtons(T("split.domains_title"), dialogContent, t.win)
-	dlg.Resize(fyne.NewSize(480, 400))
-	dlg.Show()
+	editor := container.NewBorder(hint, bottom, nil, nil, entry)
+	w.SetContent(editor)
+	w.Resize(fyne.NewSize(560, 480))
+	w.Show()
 }
 
 // parseDomainList splits the text area content into clean domain

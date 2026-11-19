@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"testing"
 )
 
@@ -291,5 +292,45 @@ func TestParseDomainListEmpty(t *testing.T) {
 	got = parseDomainList("# only comments\n\n")
 	if len(got) != 0 {
 		t.Errorf("parseDomainList comments only = %v, want empty", got)
+	}
+}
+
+// TestSplitDomainsFilePersistence verifies that SaveSplitDomains writes
+// and LoadSplitDomains reads the .split_domains file correctly.
+// HOME is redirected to a temp dir so the real config is untouched.
+func TestSplitDomainsFilePersistence(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+
+	domains := []string{"*.google.com", "github.com", "*youtube.com"}
+
+	if err := SaveSplitDomains(domains); err != nil {
+		t.Fatalf("SaveSplitDomains failed: %v", err)
+	}
+
+	got := LoadSplitDomains()
+	if len(got) != len(domains) {
+		t.Fatalf("LoadSplitDomains got %d domains, want %d: %v", len(got), len(domains), got)
+	}
+	for i, w := range domains {
+		if got[i] != w {
+			t.Errorf("LoadSplitDomains()[%d] = %q, want %q", i, got[i], w)
+		}
+	}
+
+	// Empty list round-trips.
+	if err := SaveSplitDomains(nil); err != nil {
+		t.Fatalf("SaveSplitDomains(nil) failed: %v", err)
+	}
+	got = LoadSplitDomains()
+	if len(got) != 0 {
+		t.Errorf("LoadSplitDomains after save nil = %v, want empty", got)
+	}
+
+	// Missing file returns nil.
+	_ = os.Remove(splitDomainsPath())
+	got = LoadSplitDomains()
+	if got != nil {
+		t.Errorf("LoadSplitDomains missing file = %v, want nil", got)
 	}
 }
